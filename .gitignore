@@ -1,0 +1,17 @@
+Library/
+Logs/
+obj/
+Temp/
+Build/
+Derivatives/
+MemoryCaptures/
+/Assets/AssetStoreTools*
+
+# Visual Studio / VS Code files
+.vs/
+.vscode/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
