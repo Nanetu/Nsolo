@@ -29,6 +29,7 @@ namespace NsoloGame.AI
         private float randomMoveProbability;
         private long timeBudgetMs;
         private Difficulty difficulty;
+        private readonly Dictionary<int, int> moveHistoryScores = new Dictionary<int, int>();
 
         private Random random = new Random();
 
@@ -49,17 +50,17 @@ namespace NsoloGame.AI
                 case Difficulty.Easy:
                     maxDepth = 2;
                     randomMoveProbability = 0.3f;
-                    timeBudgetMs = 5000;
+                    timeBudgetMs = 3000;
                     break;
                 case Difficulty.Medium:
                     maxDepth = 4;
                     randomMoveProbability = 0.0f;
-                    timeBudgetMs = 5000;
+                    timeBudgetMs = 3000;
                     break;
                 case Difficulty.Hard:
                     maxDepth = 6;
                     randomMoveProbability = 0.0f;
-                    timeBudgetMs = 5000;
+                    timeBudgetMs = 3000;
                     break;
             }
         }
@@ -89,6 +90,7 @@ namespace NsoloGame.AI
 
             Stopwatch timer = Stopwatch.StartNew();
             transpositionTable.Clear();
+            moveHistoryScores.Clear();
 
             Core.Move bestMove = null;
             List<Core.Move> legalMoves2 = gameEngine.GetLegalMoves(board, aiPlayer);
@@ -104,14 +106,16 @@ namespace NsoloGame.AI
 
                 float bestScore = float.MinValue;
                 Core.Move candidateMove = null;
+                List<Core.Move> orderedRootMoves = OrderMoves(board, legalMoves2, aiPlayer, bestMove);
 
-                foreach (var move in legalMoves2)
+                foreach (var move in orderedRootMoves)
                 {
                     if (cancellationToken.IsCancellationRequested || timer.ElapsedMilliseconds > timeBudgetMs)
                         break;
 
-                    Core.GameBoard nextBoard = gameEngine.ApplyMove(board, move, aiPlayer);
-                    float score = Minimax(nextBoard, depth - 1, float.MinValue, float.MaxValue, false, aiPlayer, timer.ElapsedTicks, cancellationToken);
+                    Core.MoveResult moveResult = gameEngine.ApplyMoveWithResult(board, move, aiPlayer);
+                    RecordMoveOrderingSignal(move, aiPlayer, moveResult, depth);
+                    float score = Minimax(moveResult.Board, depth - 1, float.MinValue, float.MaxValue, false, aiPlayer, timer.ElapsedTicks, cancellationToken);
 
                     if (score > bestScore)
                     {
@@ -184,11 +188,11 @@ namespace NsoloGame.AI
                 return terminalScore;
             }
 
-            // Move ordering: captures first (by captured stones), then by stone count descending
-            legalMoves = OrderMoves(board, legalMoves, currentPlayer);
+            legalMoves = OrderMoves(board, legalMoves, currentPlayer, null);
 
             float origAlpha = alpha;
             float value;
+            int storedFlag = 0;
 
             if (isMaximising)
             {
@@ -198,13 +202,17 @@ namespace NsoloGame.AI
                     if (cancellationToken.IsCancellationRequested)
                         break;
 
-                    Core.GameBoard nextBoard = gameEngine.ApplyMove(board, move, currentPlayer);
-                    float score = Minimax(nextBoard, depth - 1, alpha, beta, board.CurrentPlayer != currentPlayer, aiPlayer, startTimeTicks, cancellationToken);
+                    Core.MoveResult moveResult = gameEngine.ApplyMoveWithResult(board, move, currentPlayer);
+                    float score = Minimax(moveResult.Board, depth - 1, alpha, beta, board.CurrentPlayer != currentPlayer, aiPlayer, startTimeTicks, cancellationToken);
                     value = Math.Max(value, score);
                     alpha = Math.Max(alpha, value);
 
                     if (beta <= alpha)
+                    {
+                        RecordMoveOrderingSignal(move, currentPlayer, moveResult, depth);
+                        storedFlag = 1;
                         break;
+                    }
                 }
             }
             else
@@ -215,24 +223,31 @@ namespace NsoloGame.AI
                     if (cancellationToken.IsCancellationRequested)
                         break;
 
-                    Core.GameBoard nextBoard = gameEngine.ApplyMove(board, move, currentPlayer);
-                    float score = Minimax(nextBoard, depth - 1, alpha, beta, board.CurrentPlayer != currentPlayer, aiPlayer, startTimeTicks, cancellationToken);
+                    Core.MoveResult moveResult = gameEngine.ApplyMoveWithResult(board, move, currentPlayer);
+                    float score = Minimax(moveResult.Board, depth - 1, alpha, beta, board.CurrentPlayer != currentPlayer, aiPlayer, startTimeTicks, cancellationToken);
                     value = Math.Min(value, score);
                     beta = Math.Min(beta, value);
 
                     if (beta <= alpha)
+                    {
+                        RecordMoveOrderingSignal(move, currentPlayer, moveResult, depth);
+                        storedFlag = 2;
                         break;
+                    }
                 }
             }
 
             // Store in transposition table
-            int flag = 0;
-            if (value <= origAlpha)
-                flag = 2; // UPPER
-            else if (value >= beta)
-                flag = 1; // LOWER
-            else
-                flag = 0; // EXACT
+            int flag = storedFlag;
+            if (flag == 0)
+            {
+                if (value <= origAlpha)
+                    flag = 2; // UPPER
+                else if (value >= beta)
+                    flag = 1; // LOWER
+                else
+                    flag = 0; // EXACT
+            }
 
             transpositionTable.Store(boardHash, new TranspositionEntry(value, depth, flag));
             return value;
@@ -240,12 +255,78 @@ namespace NsoloGame.AI
 
         /// <summary>
         /// Order moves to improve alpha-beta pruning.
-        /// Captures first, then by descending stone count.
+        /// Previous-depth best moves are searched first, followed by capture and relay moves,
+        /// then moves that caused prior cutoffs, then heavier pits.
         /// </summary>
-        private List<Core.Move> OrderMoves(Core.GameBoard board, List<Core.Move> moves, int player)
+        private List<Core.Move> OrderMoves(Core.GameBoard board, List<Core.Move> moves, int player, Core.Move preferredMove)
         {
-            // Simple heuristic: sort by descending stone count
-            return moves.OrderByDescending(m => board.Get(m.Row, m.Col)).ToList();
+            return moves
+                .Select(move => CreateMoveOrderingInfo(board, move, player, preferredMove))
+                .OrderByDescending(info => info.Score)
+                .Select(info => info.Move)
+                .ToList();
+        }
+
+        private MoveOrderingInfo CreateMoveOrderingInfo(Core.GameBoard board, Core.Move move, int player, Core.Move preferredMove)
+        {
+            int score = 0;
+            if (IsSameMove(move, preferredMove))
+            {
+                score += 100000;
+            }
+
+            Core.MoveResult result = gameEngine.ApplyMoveWithResult(board, move, player);
+            score += result.CapturedStones * 1000;
+            score += Math.Max(0, result.SowingSegments.Count - 1) * 120;
+            score += result.LandingSequence.Count * 5;
+            score += board.Get(move.Row, move.Col);
+
+            if (moveHistoryScores.TryGetValue(GetMoveKey(move, player), out int historyScore))
+            {
+                score += historyScore;
+            }
+
+            return new MoveOrderingInfo(move, score);
+        }
+
+        private void RecordMoveOrderingSignal(Core.Move move, int player, Core.MoveResult result, int depth)
+        {
+            int key = GetMoveKey(move, player);
+            int score = depth * depth;
+
+            if (result != null)
+            {
+                score += result.CapturedStones * 10;
+                score += Math.Max(0, result.SowingSegments.Count - 1) * 4;
+            }
+
+            moveHistoryScores.TryGetValue(key, out int existingScore);
+            moveHistoryScores[key] = existingScore + score;
+        }
+
+        private int GetMoveKey(Core.Move move, int player)
+        {
+            return player * 1000 + move.Row * 12 + move.Col;
+        }
+
+        private bool IsSameMove(Core.Move left, Core.Move right)
+        {
+            if (left == null || right == null)
+                return false;
+
+            return left.Row == right.Row && left.Col == right.Col;
+        }
+
+        private class MoveOrderingInfo
+        {
+            public Core.Move Move { get; }
+            public int Score { get; }
+
+            public MoveOrderingInfo(Core.Move move, int score)
+            {
+                Move = move;
+                Score = score;
+            }
         }
     }
 }

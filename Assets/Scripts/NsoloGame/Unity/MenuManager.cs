@@ -26,28 +26,25 @@ namespace NsoloGame.Unity
         [SerializeField] private TMP_Text finalAiCapturedText;
 
         private bool isPaused;
+        private bool subscribedToGameOver;
 
         private void Awake()
         {
-            if (gameController == null)
-            {
-                gameController = FindObjectOfType<GameController>();
-            }
+            ResolveGameController();
         }
 
         private void OnEnable()
         {
-            if (gameController != null)
-            {
-                gameController.GameOver += HandleGameOver;
-            }
+            ResolveGameController();
+            SubscribeToGameOver();
         }
 
         private void OnDisable()
         {
-            if (gameController != null)
+            if (gameController != null && subscribedToGameOver)
             {
                 gameController.GameOver -= HandleGameOver;
+                subscribedToGameOver = false;
             }
         }
 
@@ -60,6 +57,7 @@ namespace NsoloGame.Unity
         {
             Time.timeScale = 1f;
             isPaused = false;
+            ResolveGameController();
             if (gameController != null)
             {
                 gameController.SetPaused(false);
@@ -106,6 +104,8 @@ namespace NsoloGame.Unity
             Time.timeScale = 1f;
             isPaused = false;
             SetGameplayVisible(true);
+            ResolveGameController();
+            SubscribeToGameOver();
             HideAllPanels();
 
             if (gameController == null)
@@ -214,6 +214,31 @@ namespace NsoloGame.Unity
             {
                 gameplayRoot.SetActive(visible);
             }
+        }
+
+        private void ResolveGameController()
+        {
+            if (gameController != null)
+                return;
+
+            gameController = FindObjectOfType<GameController>();
+            if (gameController != null)
+                return;
+
+            GameController[] controllers = Resources.FindObjectsOfTypeAll<GameController>();
+            if (controllers.Length > 0)
+            {
+                gameController = controllers[0];
+            }
+        }
+
+        private void SubscribeToGameOver()
+        {
+            if (gameController == null || subscribedToGameOver)
+                return;
+
+            gameController.GameOver += HandleGameOver;
+            subscribedToGameOver = true;
         }
     }
 }
