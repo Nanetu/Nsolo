@@ -6,6 +6,9 @@ Build/
 Derivatives/
 MemoryCaptures/
 /Assets/AssetStoreTools*
+/Assets/antique_veneer1_unity
+/Assets/YughuesFreeRockMaterials
+/Assets/TextMesh Pro
 
 # Visual Studio / VS Code files
 .vs/

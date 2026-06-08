@@ -28,6 +28,7 @@ namespace NsoloGame.Unity
         [SerializeField] private TMP_Text messageText;
         [SerializeField] private Button restartButton;
         [SerializeField] private float transientMessageSeconds = 2.5f;
+        [SerializeField] private bool createDebugHudIfMissing = false;
 
         [Header("Highlighting")]
         [SerializeField] private Color normalColor = Color.white;
@@ -221,7 +222,7 @@ namespace NsoloGame.Unity
         {
             if (gameStatusText != null)
             {
-                gameStatusText.text = message;
+                gameStatusText.text = FormatStatus(message);
             }
         }
 
@@ -389,6 +390,9 @@ namespace NsoloGame.Unity
 
             if (hudCanvas == null)
             {
+                if (!createDebugHudIfMissing)
+                    return;
+
                 GameObject canvasObject = new GameObject("HUD Canvas");
                 canvasObject.transform.SetParent(transform, false);
                 hudCanvas = canvasObject.AddComponent<Canvas>();
@@ -407,21 +411,33 @@ namespace NsoloGame.Unity
 
             if (gameStatusText == null)
             {
+                if (!createDebugHudIfMissing)
+                    return;
+
                 gameStatusText = CreateHudText("Status Text", hudCanvas.transform, "Your turn", 40, TextAlignmentOptions.Center, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -45f), new Vector2(760f, 70f));
             }
 
             if (capturedP1Text == null)
             {
+                if (!createDebugHudIfMissing)
+                    return;
+
                 capturedP1Text = CreateHudText("Player Score Text", hudCanvas.transform, "You captured: 0", 30, TextAlignmentOptions.Left, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(220f, 46f), new Vector2(400f, 56f));
             }
 
             if (capturedP2Text == null)
             {
+                if (!createDebugHudIfMissing)
+                    return;
+
                 capturedP2Text = CreateHudText("AI Score Text", hudCanvas.transform, "AI captured: 0", 30, TextAlignmentOptions.Right, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-230f, -46f), new Vector2(400f, 56f));
             }
 
             if (messageText == null)
             {
+                if (!createDebugHudIfMissing)
+                    return;
+
                 messageText = CreateHudText("Message Text", hudCanvas.transform, string.Empty, 34, TextAlignmentOptions.Center, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 110f), new Vector2(900f, 64f));
                 messageText.enabled = false;
             }
@@ -487,18 +503,34 @@ namespace NsoloGame.Unity
         {
             if (capturedP1Text != null)
             {
-                capturedP1Text.text = "You captured: " + capturedP1;
+                capturedP1Text.text = capturedP1.ToString("00");
             }
 
             if (capturedP2Text != null)
             {
-                capturedP2Text.text = "AI captured: " + capturedP2;
+                capturedP2Text.text = capturedP2.ToString("00");
             }
 
             if (gameStatusText != null && board != null)
             {
-                gameStatusText.text = board.CurrentPlayer == 1 ? "Your turn" : "AI turn";
+                gameStatusText.text = board.CurrentPlayer == 1 ? "YOUR TURN" : "THINKING...";
             }
+        }
+
+        private string FormatStatus(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+                return string.Empty;
+
+            string lower = message.ToLowerInvariant();
+            if (lower.Contains("ai") || lower.Contains("opponent"))
+                return "THINKING...";
+            if (lower.Contains("your") || lower.Contains("player"))
+                return "YOUR TURN";
+            if (lower.Contains("sowing"))
+                return "SOWING...";
+
+            return message.ToUpperInvariant();
         }
 
         private void Log(string message)

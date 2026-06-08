@@ -43,6 +43,7 @@ namespace NsoloGame.Unity
         private CancellationTokenSource aiMoveCancellation;
         private Move aiMove;
         private bool isPaused;
+        private bool systemsInitialized;
 
         public event System.Action<int, int, int> GameOver;
         public GameState CurrentState => gameState;
@@ -58,11 +59,26 @@ namespace NsoloGame.Unity
                     ? "No UIManager found in scene during Awake()."
                     : $"Auto-found UIManager: {uiManager.name}.");
             }
+
+            InitializeSystems();
         }
 
         private void Start()
         {
             Log("Start()");
+            InitializeSystems();
+
+            if (autoStartOnSceneLoad)
+            {
+                InitializeGame();
+            }
+        }
+
+        private void InitializeSystems()
+        {
+            if (systemsInitialized)
+                return;
+
             GameBoard.InitializeZobrist();
             
             // Initialize game systems
@@ -78,16 +94,13 @@ namespace NsoloGame.Unity
             Log($"Game systems initialized. AI difficulty={aiDifficulty}.");
 
             gameState = GameState.Initialising;
-
-            if (autoStartOnSceneLoad)
-            {
-                InitializeGame();
-            }
+            systemsInitialized = true;
         }
 
         public void StartNewGame(int difficultyInt)
         {
             Log($"StartNewGame(difficultyInt={difficultyInt})");
+            InitializeSystems();
             SetAIDifficulty(difficultyInt);
             InitializeGame();
         }
@@ -237,7 +250,8 @@ namespace NsoloGame.Unity
             }
             else
             {
-                Debug.LogWarning("GameController: AI returned no move.");
+                Debug.LogWarning("GameController: AI returned no move. Ending game in favour of the human player.");
+                FinishGame(humanPlayer);
             }
         }
 
@@ -270,6 +284,7 @@ namespace NsoloGame.Unity
         public void RestartGame()
         {
             Log("RestartGame()");
+            InitializeSystems();
             gameState = GameState.Initialising;
             InitializeGame();
         }
@@ -296,6 +311,7 @@ namespace NsoloGame.Unity
 
         public void SetAIDifficulty(int difficultyInt)
         {
+            InitializeSystems();
             aiDifficulty = (Difficulty)difficultyInt;
             PlayerPrefs.SetInt("AIDifficulty", difficultyInt);
             PlayerPrefs.Save();

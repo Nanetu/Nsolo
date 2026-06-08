@@ -22,8 +22,12 @@ namespace NsoloGame.Unity
 
         [Header("Pit Placement")]
         [SerializeField] private float pitRadius = 0.33f;
+        [SerializeField] private bool usePitBoundsBottom = true;
+        [SerializeField] private float pitBottomYOffset = 0.035f;
         [SerializeField] private bool useCenteredStonePiles = true;
         [SerializeField] private float centeredPitRadius = 0.075f;
+        [SerializeField] private bool usePitFormationLayout = true;
+        [SerializeField] private float pitFormationSpacing = 0.09f;
         [SerializeField] private int stonesPerPileLayer = 7;
         [SerializeField] private float pileLayerHeight = 0.028f;
         [SerializeField] private float stoneYOffset = 0.04f;
@@ -34,6 +38,9 @@ namespace NsoloGame.Unity
         [SerializeField] private float storeRadius = 0.55f;
         [SerializeField] private float centeredStoreRadius = 0.16f;
         [SerializeField] private bool useOrganicStoreScatter = true;
+        [SerializeField] private bool useStoreBoundsDistribution = true;
+        [SerializeField] private float storeBoundsPadding = 0.18f;
+        [SerializeField] private float storeSurfaceYOffset = 0.045f;
         [SerializeField] private float storePileHeightStep = 0.018f;
         [SerializeField] private int storeStonesPerLayer = 14;
         [SerializeField] private int maxVisualStonesPerStore = 48;
@@ -292,8 +299,8 @@ namespace NsoloGame.Unity
             for (int i = 0; i < visualCount; i++)
             {
                 Vector3 position = isStore && useOrganicStoreScatter
-                    ? GetOrganicStoreStonePosition(center, i, visualCount, centeredRadius, random)
-                    : GetStoneGroupPosition(center, i, visualCount, radius, centeredRadius, random);
+                    ? GetStoreStonePosition(center, i, visualCount, centeredRadius, random)
+                    : GetPitStonePosition(center, i, visualCount, radius, centeredRadius, random);
                 Quaternion rotation = Quaternion.Euler(
                     RandomRange(random, -randomRotationDegrees, randomRotationDegrees),
                     RandomRange(random, 0f, 360f),
@@ -315,7 +322,7 @@ namespace NsoloGame.Unity
             if (pit == null)
                 return transform.position;
 
-            return pit.position + Vector3.up * stoneYOffset;
+            return GetPitBasePosition(pit);
         }
 
         private Vector3 GetPitStonePosition(int row, int col, int visualIndex)
@@ -325,10 +332,10 @@ namespace NsoloGame.Unity
                 return transform.position;
 
             System.Random random = new System.Random(randomSeed + row * 97 + col * 13 + visualIndex * 23);
-            return GetStoneGroupPosition(pit, visualIndex, Mathf.Max(visualIndex + 1, 1), pitRadius, centeredPitRadius, random);
+            return GetPitStonePosition(pit, visualIndex, Mathf.Max(visualIndex + 1, 1), pitRadius, centeredPitRadius, random);
         }
 
-        private Vector3 GetStoneGroupPosition(Transform center, int index, int total, float scatterRadius, float centeredRadius, System.Random random)
+        private Vector3 GetPitStonePosition(Transform center, int index, int total, float scatterRadius, float centeredRadius, System.Random random)
         {
             float radius = useCenteredStonePiles ? centeredRadius : scatterRadius;
             Vector2 offset = useCenteredStonePiles
@@ -336,13 +343,30 @@ namespace NsoloGame.Unity
                 : GetScatterOffset(index, total, radius, random);
 
             int layer = useCenteredStonePiles ? index / Mathf.Max(stonesPerPileLayer, 1) : 0;
-            float y = stoneYOffset + layer * pileLayerHeight;
+            Vector3 basePosition = GetPitBasePosition(center);
 
-            return center.position + Vector3.right * offset.x + Vector3.forward * offset.y + Vector3.up * y;
+            return basePosition
+                + center.right * offset.x
+                + center.forward * offset.y
+                + Vector3.up * (layer * pileLayerHeight);
+        }
+
+        private Vector3 GetPitBasePosition(Transform pit)
+        {
+            if (!usePitBoundsBottom)
+                return pit.position + Vector3.up * stoneYOffset;
+
+            Bounds bounds = GetWorldBounds(pit);
+            return new Vector3(bounds.center.x, bounds.min.y + pitBottomYOffset, bounds.center.z);
         }
 
         private Vector2 GetCenteredPileOffset(int index, int total, float radius)
         {
+            if (usePitFormationLayout)
+            {
+                return GetPitFormationOffset(index, total, radius);
+            }
+
             if (index == 0)
                 return Vector2.zero;
 
@@ -352,6 +376,80 @@ namespace NsoloGame.Unity
             float ring = Mathf.Min(radius, radius * (0.45f + 0.12f * (index / Mathf.Max(stonesPerPileLayer, 1))));
 
             return new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * ring;
+        }
+
+        private Vector2 GetPitFormationOffset(int index, int total, float radius)
+        {
+            float spacing = Mathf.Min(pitFormationSpacing, radius);
+
+            if (total <= 1)
+                return Vector2.zero;
+
+            if (total == 2)
+            {
+                return index == 0
+                    ? new Vector2(-spacing * 0.5f, 0f)
+                    : new Vector2(spacing * 0.5f, 0f);
+            }
+
+            if (total == 3)
+            {
+                switch (index)
+                {
+                    case 0: return new Vector2(0f, spacing * 0.52f);
+                    case 1: return new Vector2(-spacing * 0.58f, -spacing * 0.42f);
+                    default: return new Vector2(spacing * 0.58f, -spacing * 0.42f);
+                }
+            }
+
+            if (total == 4)
+            {
+                switch (index)
+                {
+                    case 0: return new Vector2(-spacing * 0.55f, spacing * 0.45f);
+                    case 1: return new Vector2(spacing * 0.55f, spacing * 0.45f);
+                    case 2: return new Vector2(-spacing * 0.55f, -spacing * 0.45f);
+                    default: return new Vector2(spacing * 0.55f, -spacing * 0.45f);
+                }
+            }
+
+            if (total == 5)
+            {
+                if (index == 0)
+                    return Vector2.zero;
+
+                float angle = Mathf.PI * 0.25f + (index - 1) * Mathf.PI * 0.5f;
+                return new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * spacing * 0.85f;
+            }
+
+            if (total == 6)
+            {
+                if (index < 5)
+                {
+                    float angle = Mathf.PI * 0.5f + index * Mathf.PI * 2f / 5f;
+                    return new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * spacing * 0.9f;
+                }
+
+                return Vector2.zero;
+            }
+
+            int layerIndex = index % Mathf.Max(stonesPerPileLayer, 1);
+            int layer = index / Mathf.Max(stonesPerPileLayer, 1);
+            int layerCount = Mathf.Min(total - layer * Mathf.Max(stonesPerPileLayer, 1), Mathf.Max(stonesPerPileLayer, 1));
+            float layerAngle = Mathf.PI * 0.5f + layerIndex * Mathf.PI * 2f / Mathf.Max(layerCount, 1);
+            float layerRadius = Mathf.Min(radius, spacing * (0.78f + layer * 0.18f));
+
+            return new Vector2(Mathf.Cos(layerAngle), Mathf.Sin(layerAngle)) * layerRadius;
+        }
+
+        private Vector3 GetStoreStonePosition(Transform center, int index, int total, float radius, System.Random random)
+        {
+            if (useStoreBoundsDistribution)
+            {
+                return GetStoreBoundsDistributedPosition(center, index, total, random);
+            }
+
+            return GetOrganicStoreStonePosition(center, index, total, radius, random);
         }
 
         private Vector3 GetOrganicStoreStonePosition(Transform center, int index, int total, float radius, System.Random random)
@@ -365,6 +463,71 @@ namespace NsoloGame.Unity
             float y = stoneYOffset + layer * storePileHeightStep + unevenHeight;
 
             return center.position + Vector3.right * offset.x + Vector3.forward * offset.y + Vector3.up * y;
+        }
+
+        private Vector3 GetStoreBoundsDistributedPosition(Transform store, int index, int total, System.Random random)
+        {
+            Bounds bounds = GetWorldBounds(store);
+            Vector3 right = store.right;
+            Vector3 forward = store.forward;
+
+            GetProjectedExtents(bounds, right, out float rightMin, out float rightMax);
+            GetProjectedExtents(bounds, forward, out float forwardMin, out float forwardMax);
+
+            float rightLength = Mathf.Max(0.01f, rightMax - rightMin);
+            float forwardLength = Mathf.Max(0.01f, forwardMax - forwardMin);
+            float rightPadding = Mathf.Min(storeBoundsPadding, rightLength * 0.4f);
+            float forwardPadding = Mathf.Min(storeBoundsPadding, forwardLength * 0.4f);
+
+            float rightValue = RandomRange(random, rightMin + rightPadding, rightMax - rightPadding);
+            float forwardValue = RandomRange(random, forwardMin + forwardPadding, forwardMax - forwardPadding);
+
+            int layer = index / Mathf.Max(storeStonesPerLayer, 1);
+            float y = bounds.max.y + storeSurfaceYOffset + layer * storePileHeightStep;
+
+            Vector3 horizontal = right * rightValue + forward * forwardValue;
+            Vector3 storeCenterProjection = right * Vector3.Dot(bounds.center, right) + forward * Vector3.Dot(bounds.center, forward);
+
+            return bounds.center
+                + (horizontal - storeCenterProjection)
+                + Vector3.up * (y - bounds.center.y);
+        }
+
+        private Bounds GetWorldBounds(Transform target)
+        {
+            Collider targetCollider = target.GetComponentInChildren<Collider>();
+            if (targetCollider != null)
+                return targetCollider.bounds;
+
+            Renderer targetRenderer = target.GetComponentInChildren<Renderer>();
+            if (targetRenderer != null)
+                return targetRenderer.bounds;
+
+            return new Bounds(target.position, Vector3.one * 0.25f);
+        }
+
+        private void GetProjectedExtents(Bounds bounds, Vector3 axis, out float min, out float max)
+        {
+            axis.Normalize();
+            Vector3 center = bounds.center;
+            Vector3 extents = bounds.extents;
+
+            min = float.MaxValue;
+            max = float.MinValue;
+
+            for (int x = -1; x <= 1; x += 2)
+            {
+                for (int y = -1; y <= 1; y += 2)
+                {
+                    for (int z = -1; z <= 1; z += 2)
+                    {
+                        Vector3 corner = center + new Vector3(extents.x * x, extents.y * y, extents.z * z);
+                        float projected = Vector3.Dot(corner, axis);
+                        min = Mathf.Min(min, projected);
+                        max = Mathf.Max(max, projected);
+                    }
+                }
+            }
         }
 
         private Vector2 GetOrganicClusterOffset(int index, float radius, System.Random random)
