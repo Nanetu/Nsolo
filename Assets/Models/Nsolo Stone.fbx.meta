@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: 3a156fd5a22666042841b95bfdbfc3aa
+guid: bd203baf5bbc051419627876cfac2a48
 ModelImporter:
   serializedVersion: 22200
   internalIDToNameTable: []
@@ -7,20 +7,10 @@ ModelImporter:
   - first:
       type: UnityEngine:Material
       assembly: UnityEngine.CoreModule
-      name: Board_mat
-    second: {fileID: 2100000, guid: 210e33cba196d7f4eb1b91f218d0d90f, type: 2}
-  - first:
-      type: UnityEngine:Material
-      assembly: UnityEngine.CoreModule
-      name: Stone Mat
-    second: {fileID: 2100000, guid: 743b80e1d3a4c5f4c9dd9471a425d374, type: 2}
-  - first:
-      type: UnityEngine:Material
-      assembly: UnityEngine.CoreModule
-      name: Stone Mat2.001
-    second: {fileID: 2100000, guid: 7668f787c40ed4249ad32fa6ae94d5a9, type: 2}
+      name: Stone
+    second: {fileID: 2100000, guid: a3fced283f56adc4eb4ddd9343542523, type: 2}
   materials:
-    materialImportMode: 1
+    materialImportMode: 2
     materialName: 0
     materialSearch: 1
     materialLocation: 1
@@ -50,7 +40,7 @@ ModelImporter:
     isReadable: 0
   meshes:
     lODScreenPercentages: []
-    globalScale: 1
+    globalScale: 1.7
     meshCompression: 0
     addColliders: 0
     useSRGBMaterialColor: 1
@@ -105,7 +95,7 @@ ModelImporter:
     armStretch: 0.05
     legStretch: 0.05
     feetSpacing: 0
-    globalScale: 1
+    globalScale: 1.7
     rootMotionBoneName: 
     hasTranslationDoF: 0
     hasExtraRoot: 0
