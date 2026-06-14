@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: c012a2c079c3df4498ec10039d8f1011
+guid: 61b5589036235bd4b9719bb7a87b4b28
 ModelImporter:
   serializedVersion: 22200
   internalIDToNameTable: []
@@ -7,8 +7,8 @@ ModelImporter:
   - first:
       type: UnityEngine:Material
       assembly: UnityEngine.CoreModule
-      name: rosewood_veneer1
-    second: {fileID: 2100000, guid: 4914947a0139cd44f9bf67bd9cf6cd6d, type: 2}
+      name: Material
+    second: {fileID: 2100000, guid: a3fced283f56adc4eb4ddd9343542523, type: 2}
   materials:
     materialImportMode: 2
     materialName: 0
@@ -40,7 +40,7 @@ ModelImporter:
     isReadable: 0
   meshes:
     lODScreenPercentages: []
-    globalScale: 1
+    globalScale: 0.04
     meshCompression: 0
     addColliders: 0
     useSRGBMaterialColor: 1
@@ -95,7 +95,7 @@ ModelImporter:
     armStretch: 0.05
     legStretch: 0.05
     feetSpacing: 0
-    globalScale: 1
+    globalScale: 0.0004
     rootMotionBoneName: 
     hasTranslationDoF: 0
     hasExtraRoot: 0
