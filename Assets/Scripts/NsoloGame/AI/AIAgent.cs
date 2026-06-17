@@ -49,12 +49,12 @@ namespace NsoloGame.AI
             {
                 case Difficulty.Easy:
                     maxDepth = 2;
-                    randomMoveProbability = 0.3f;
+                    randomMoveProbability = 0.8f;
                     timeBudgetMs = 3000;
                     break;
                 case Difficulty.Medium:
                     maxDepth = 4;
-                    randomMoveProbability = 0.0f;
+                    randomMoveProbability = 0.3f;
                     timeBudgetMs = 3000;
                     break;
                 case Difficulty.Hard:
