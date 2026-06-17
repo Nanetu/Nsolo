@@ -122,8 +122,11 @@ namespace NsoloGame.Core
         /// - Final hole is in player's inner row (P1: r==1, P2: r==2)
         /// - Final hole has exactly 1 stone (was empty before sowing)
         /// 
-        /// Capture: take opponent's stone at same column in their inner row
-        /// Extended: if opponent's outer row at same column > 0, take those too
+        /// Capture: take opponent's stones at same column in their inner row
+        /// Extended: only if the inner row capture above was non-zero, also take
+        /// opponent's outer row stones at same column. If the inner row was already
+        /// empty, no capture occurs at all (prevents "stealing" outer-row stones
+        /// when the inner row has nothing to capture).
         /// </summary>
         private int EvaluateCapture(GameBoard board, int lastIndex, int player)
         {
@@ -139,9 +142,13 @@ namespace NsoloGame.Core
             int opponentOuterRow = player == 1 ? 3 : 0;
 
             int primaryStones = board.Get(opponentInnerRow, finalC);
+
+            if (primaryStones == 0)
+                return 0;
+
             board.Set(opponentInnerRow, finalC, 0);
 
-            // Extended capture: opponent's outer row at same column
+            // Extended capture: opponent's outer row at same column, only if inner row had stones to capture
             int extendedStones = board.Get(opponentOuterRow, finalC);
             board.Set(opponentOuterRow, finalC, 0);
 

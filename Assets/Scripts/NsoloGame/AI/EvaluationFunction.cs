@@ -84,12 +84,15 @@ namespace NsoloGame.AI
 
             for (int c = 0; c < 12; c++)
             {
-                int opponentStones = board.Get(opponentInnerRow, c) + board.Get(opponentOuterRow, c);
-                if (opponentStones > 0)
+                int opponentInnerStones = board.Get(opponentInnerRow, c);
+                if (opponentInnerStones > 0)
                 {
-                    // Threat if we have a hole with stones that could land on empty inner hole
+                    // Threat if we have a hole with stones that could land on empty inner hole.
+                    // Outer row only adds to the threat if the inner row has stones to capture,
+                    // matching the actual capture rule (no capture if inner row is empty).
                     if (board.Get(playerInnerRow, c) >= 1)
                     {
+                        int opponentStones = opponentInnerStones + board.Get(opponentOuterRow, c);
                         threat += opponentStones * 0.1f;
                     }
                 }
