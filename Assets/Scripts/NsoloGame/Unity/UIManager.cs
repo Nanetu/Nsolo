@@ -8,32 +8,38 @@ using NsoloGame.Core;
 
 namespace NsoloGame.Unity
 {
-    /// <summary>
-    /// Bridges the 3D board scene to the game controller.
-    /// Handles pit input, pit highlighting, status text, and stone visual refreshes.
-    /// </summary>
     public class UIManager : MonoBehaviour
     {
         [Header("Board")]
-        [SerializeField] private GameObject[] holes = new GameObject[48];
+        [SerializeField] private GameObject[] holes = new GameObject[32];
         [SerializeField] private PitStoneVisualizer stoneVisualizer;
         [SerializeField] private GameController gameController;
         [SerializeField] private bool showStartingBoardIfNoControllerRefresh = true;
 
-        [Header("HUD")]
+        [Header("HUD — Status")]
         [SerializeField] private Canvas hudCanvas;
-        [SerializeField] private TMP_Text capturedP1Text;
-        [SerializeField] private TMP_Text capturedP2Text;
-        [SerializeField] private TMP_Text gameStatusText;
-        [SerializeField] private TMP_Text messageText;
-        [SerializeField] private Button restartButton;
-        [SerializeField] private float transientMessageSeconds = 2.5f;
-        [SerializeField] private bool createDebugHudIfMissing = false;
+        [SerializeField] private TMP_Text turnStatusText;
+        [SerializeField] private TMP_Text timerText;
+
+        [Header("HUD — Scores")]
+        [SerializeField] private TMP_Text playerScoreText;
+        [SerializeField] private TMP_Text aiScoreText;
+
+        [Header("HUD — Last Move")]
+        [SerializeField] private TMP_Text lastMoveText;
+
+        [Header("HUD — Buttons")]
+        [SerializeField] private Button undoButton;
+        [SerializeField] private Button hintButton;
+        [SerializeField] private Button endTurnButton;
 
         [Header("Highlighting")]
         [SerializeField] private Color normalColor = Color.white;
         [SerializeField] private Color legalMoveColor = new Color(1f, 0.85f, 0.05f);
         [SerializeField] private Color illegalMoveColor = Color.red;
+
+        [Header("Settings")]
+        [SerializeField] private float transientMessageSeconds = 3f;
 
         [Header("Debug")]
         [SerializeField] private bool enableBreadcrumbLogs = false;
@@ -43,502 +49,295 @@ namespace NsoloGame.Unity
         private bool hasReceivedBoardState;
         private Camera inputCamera;
         private int lastHandledInputFrame = -1;
-        private Coroutine messageCoroutine;
+        private Coroutine lastMoveCoroutine;
+
+        // Timer
+        private bool timerRunning;
+        private float timerStartTime;
 
         private void Awake()
         {
             Log("Awake()");
 
             if (stoneVisualizer == null)
-            {
                 stoneVisualizer = GetComponent<PitStoneVisualizer>();
-                Log(stoneVisualizer == null
-                    ? "No PitStoneVisualizer found on the UIManager GameObject."
-                    : "Auto-found PitStoneVisualizer on the UIManager GameObject.");
-            }
 
             if (gameController == null)
-            {
                 gameController = FindObjectOfType<GameController>();
-                Log(gameController == null
-                    ? "No GameController found in scene during Awake()."
-                    : $"Auto-found GameController: {gameController.name}.");
-            }
 
             InitializeBoardUI();
-            EnsureHud();
-            EnsureEventSystem();
         }
 
         private void Start()
         {
             Log("Start()");
 
-            if (restartButton != null && gameController != null)
-            {
-                restartButton.onClick.AddListener(gameController.RestartGame);
-                Log("Restart button wired.");
-            }
-
             if (showStartingBoardIfNoControllerRefresh)
-            {
                 StartCoroutine(SpawnStartingBoardFallbackNextFrame());
-            }
         }
 
         private void InitializeBoardUI()
         {
-            Log("InitializeBoardUI()");
-
             inputCamera = Camera.main;
-            holeRenderers = new Renderer[4, 12];
+            holeRenderers = new Renderer[4, 8];
             propertyBlock = new MaterialPropertyBlock();
-            int assignedHoles = 0;
 
-            for (int i = 0; i < holes.Length && i < 48; i++)
+            // Always rebuild by name from scratch rather than trusting whatever is serialized
+            // in the Inspector array — that array was authored for the old 4x12 board and its
+            // positions no longer line up with the current 4x8 layout, which silently wires
+            // pit click handlers to the wrong row/col (or to nothing) for everything past row 0.
+            holes = new GameObject[32];
+
+            for (int i = 0; i < 32; i++)
             {
-                GameObject hole = holes[i];
-                int row = i / 12;
-                int col = i % 12;
+                int row = i / 8, col = i % 8;
 
-                if (hole == null)
-                {
-                    hole = GameObject.Find($"Hole_{row}_{col}");
-                    holes[i] = hole;
-                }
+                holes[i] = GameObject.Find($"Hole_{row}_{col}");
 
-                if (hole == null)
+                if (holes[i] == null)
                 {
-                    Debug.LogWarning($"UIManager: Missing pit object Hole_{row}_{col}.");
+                    Debug.LogWarning($"UIManager: Missing Hole_{row}_{col}.");
                     continue;
                 }
 
-                assignedHoles++;
+                if (holes[i].GetComponent<Collider>() == null)
+                    Debug.LogWarning($"UIManager: {holes[i].name} needs a Collider.");
 
-                Collider pitCollider = hole.GetComponent<Collider>();
-                if (pitCollider == null)
-                {
-                    Debug.LogWarning($"UIManager: {hole.name} needs a Collider for click input.");
-                }
-
-                PitClickHandler clickHandler = hole.GetComponent<PitClickHandler>();
-                if (clickHandler == null)
-                {
-                    clickHandler = hole.AddComponent<PitClickHandler>();
-                }
-
-                clickHandler.Initialize(this, row, col);
-                holeRenderers[row, col] = hole.GetComponentInChildren<Renderer>();
+                PitClickHandler handler = holes[i].GetComponent<PitClickHandler>()
+                    ?? holes[i].AddComponent<PitClickHandler>();
+                handler.Initialize(this, row, col);
+                holeRenderers[row, col] = holes[i].GetComponentInChildren<Renderer>();
                 ClearHoleColor(row, col);
             }
 
             if (stoneVisualizer != null)
-            {
                 stoneVisualizer.SetHoles(holes);
-            }
             else
-            {
-                Debug.LogWarning("UIManager: Stone Visualizer is not assigned, so stone spawning cannot run.");
-            }
-
-            Log($"InitializeBoardUI() complete. Assigned holes: {assignedHoles}/48.");
+                Debug.LogWarning("UIManager: PitStoneVisualizer not assigned.");
         }
 
         private void Update()
         {
             HandlePointerInput();
+            UpdateTimerDisplay();
         }
+
+        // ── Public API called by GameController ───────────────────────────
 
         public void OnPitClicked(int row, int col)
         {
-            Log($"OnPitClicked(row={row}, col={col})");
-            if (lastHandledInputFrame == Time.frameCount)
-                return;
-
+            Log($"OnPitClicked({row},{col})");
+            if (lastHandledInputFrame == Time.frameCount) return;
             lastHandledInputFrame = Time.frameCount;
-
-            if (gameController != null)
-            {
-                gameController.OnHoleTouched(row, col);
-            }
-            else
-            {
-                Debug.LogWarning("UIManager: Pit click ignored because GameController is not assigned.");
-            }
+            gameController?.OnHoleTouched(row, col);
         }
 
-        public void UpdateDisplay(GameBoard board, int capturedP1, int capturedP2)
+        public void UpdateDisplay(GameBoard board)
         {
-            Log("UpdateDisplay() called.");
             hasReceivedBoardState = board != null;
-
-            if (stoneVisualizer != null)
-            {
-                stoneVisualizer.Refresh(board, capturedP1, capturedP2);
-            }
-            else
-            {
-                Debug.LogWarning("UIManager: UpdateDisplay cannot refresh stones because Stone Visualizer is not assigned.");
-            }
-
-            UpdateHudOnly(board, capturedP1, capturedP2);
-        }
-
-        public void HighlightLegalMoves(List<Move> moves)
-        {
-            Log($"HighlightLegalMoves() count={(moves == null ? 0 : moves.Count)}");
-            ClearHighlights();
-
-            if (moves == null)
-                return;
-
-            foreach (Move move in moves)
-            {
-                SetHoleColor(move.Row, move.Col, legalMoveColor);
-            }
-        }
-
-        public void ClearHighlights()
-        {
-            Log("ClearHighlights()");
-
-            for (int r = 0; r < 4; r++)
-            {
-                for (int c = 0; c < 12; c++)
-                {
-                    ClearHoleColor(r, c);
-                }
-            }
-        }
-
-        public void FlashIllegalMove(int row, int col)
-        {
-            Log($"FlashIllegalMove(row={row}, col={col})");
-            ShowMessage("Invalid move", transientMessageSeconds);
-            StartCoroutine(FlashCoroutine(row, col, illegalMoveColor, 0.35f));
+            stoneVisualizer?.Refresh(board);
+            UpdateScores(board);
         }
 
         public void ShowStatus(string message)
         {
-            if (gameStatusText != null)
-            {
-                gameStatusText.text = FormatStatus(message);
-            }
+            if (turnStatusText == null) return;
+            string lower = message.ToLowerInvariant();
+            if (lower.Contains("your") || lower.Contains("human"))
+                turnStatusText.text = "YOUR TURN";
+            else if (lower.Contains("think") || lower.Contains("ai"))
+                turnStatusText.text = "THINKING...";
+            else if (lower.Contains("sow"))
+                turnStatusText.text = "SOWING...";
+            else
+                turnStatusText.text = message.ToUpperInvariant();
         }
 
-        public void ShowMessage(string message, float seconds = 2.5f)
+        public void ShowLastMove(string message)
         {
-            if (messageText == null)
-                return;
+            if (lastMoveText == null) return;
 
-            if (messageCoroutine != null)
-            {
-                StopCoroutine(messageCoroutine);
-            }
-
-            messageText.text = message;
-            messageText.enabled = true;
-            messageCoroutine = StartCoroutine(ClearMessageAfterDelay(seconds));
+            if (lastMoveCoroutine != null) StopCoroutine(lastMoveCoroutine);
+            lastMoveText.text = message;
+            lastMoveText.enabled = true;
+            lastMoveCoroutine = StartCoroutine(ClearLastMoveAfterDelay(transientMessageSeconds));
         }
 
-        private IEnumerator FlashCoroutine(int row, int col, Color flashColor, float duration)
+        // Keep ShowMessage as an alias so GameController's existing call compiles
+        public void ShowMessage(string message, float seconds = 2.5f) => ShowLastMove(message);
+
+        public void HighlightLegalMoves(List<Move> moves)
         {
-            SetHoleColor(row, col, flashColor);
-            yield return new WaitForSeconds(duration);
-            ClearHoleColor(row, col);
+            ClearHighlights();
+            if (moves == null) return;
+            foreach (var m in moves) SetHoleColor(m.Row, m.Col, legalMoveColor);
+        }
+
+        public void ClearHighlights()
+        {
+            for (int r = 0; r < 4; r++)
+                for (int c = 0; c < 8; c++)
+                    ClearHoleColor(r, c);
+        }
+
+        public void FlashIllegalMove(int row, int col)
+        {
+            ShowLastMove("Invalid move");
+            StartCoroutine(FlashCoroutine(row, col, illegalMoveColor, 0.35f));
         }
 
         public void ShowGameOver(int winner)
         {
-            Log($"ShowGameOver(winner={winner})");
             ClearHighlights();
-
-            if (gameStatusText != null)
-            {
-                gameStatusText.text = winner == 1 ? "Player 1 Wins!" : "Player 2 (AI) Wins!";
-            }
-
-            ShowMessage(winner == 1 ? "You win!" : "AI wins!", 6f);
+            StopTurnTimer();
+            ShowStatus(winner == 1 ? "You win!" : "AI wins!");
+            ShowLastMove(winner == 1 ? "Victory!" : "Defeated!");
         }
 
-        public void AnimateSowing(List<(int r, int c)> sequence)
+        public void FlashHintPit(int row, int col)
         {
-            Log($"AnimateSowing() sequence count={(sequence == null ? 0 : sequence.Count)}");
-            // The visual board is rebuilt from authoritative GameBoard state.
-            // This method remains as a hook for future per-stone movement animation.
+            if (stoneVisualizer != null)
+                StartCoroutine(stoneVisualizer.FlashHintGlow(row, col));
+        }
+
+        public void SetUndoInteractable(bool value)
+        {
+            if (undoButton != null) undoButton.interactable = value;
         }
 
         public IEnumerator PlayMoveAnimation(GameBoard startingBoard, MoveResult moveResult)
         {
             if (stoneVisualizer != null)
-            {
                 yield return stoneVisualizer.PlayMoveAnimation(startingBoard, moveResult);
-            }
 
             if (moveResult != null)
+                UpdateScores(moveResult.Board);
+        }
+
+        // ── Timer ─────────────────────────────────────────────────────────
+
+        public void StartTurnTimer()
+        {
+            timerRunning = true;
+            timerStartTime = Time.time;
+        }
+
+        public void StopTurnTimer()
+        {
+            timerRunning = false;
+        }
+
+        private void UpdateTimerDisplay()
+        {
+            if (timerText == null) return;
+            if (!timerRunning) return;
+            float elapsed = Time.time - timerStartTime;
+            int m = (int)(elapsed / 60);
+            int s = (int)(elapsed % 60);
+            timerText.text = $"{m:00}:{s:00}";
+        }
+
+        // ── Helpers ───────────────────────────────────────────────────────
+
+        // Score is the total number of stones still sitting in each player's own pits
+        // (not the captured/store count), so it starts at 32 and only drops when the
+        // opponent captures from that player's side.
+        private void UpdateScores(GameBoard board)
+        {
+            if (board == null) return;
+
+            int p1Stones = 0;
+            int p2Stones = 0;
+            for (int c = 0; c < GameBoard.Cols; c++)
             {
-                UpdateHudOnly(moveResult.Board, moveResult.Board.CapturedP1, moveResult.Board.CapturedP2);
+                p1Stones += board.Get(0, c) + board.Get(1, c);
+                p2Stones += board.Get(2, c) + board.Get(3, c);
             }
+
+            if (playerScoreText != null) playerScoreText.text = p1Stones.ToString("00");
+            if (aiScoreText != null) aiScoreText.text = p2Stones.ToString("00");
+        }
+
+        private IEnumerator FlashCoroutine(int row, int col, Color color, float duration)
+        {
+            SetHoleColor(row, col, color);
+            yield return new WaitForSeconds(duration);
+            ClearHoleColor(row, col);
+        }
+
+        private IEnumerator ClearLastMoveAfterDelay(float seconds)
+        {
+            yield return new WaitForSeconds(seconds);
+            if (lastMoveText != null) lastMoveText.enabled = false;
+            lastMoveCoroutine = null;
         }
 
         private IEnumerator SpawnStartingBoardFallbackNextFrame()
         {
             yield return null;
-
-            if (hasReceivedBoardState)
-            {
-                Log("Fallback skipped because GameController already supplied a GameBoard.");
-                yield break;
-            }
-
-            if (stoneVisualizer == null)
-            {
-                Debug.LogWarning("UIManager: Starting-board fallback skipped because Stone Visualizer is not assigned.");
-                yield break;
-            }
-
-            Debug.LogWarning("UIManager: No GameBoard was received from GameController by the next frame. Spawning a default starting board for visual debugging.");
-            UpdateDisplay(new GameBoard(), 0, 0);
+            if (hasReceivedBoardState || stoneVisualizer == null) yield break;
+            Debug.LogWarning("UIManager: No board received — spawning default starting board.");
+            UpdateDisplay(new GameBoard());
         }
 
         private void HandlePointerInput()
         {
-            if (IsPointerOverUi())
-                return;
+            if (IsPointerOverUi()) return;
 
             if (Input.touchCount > 0)
             {
-                Touch touch = Input.GetTouch(0);
-                if (touch.phase == TouchPhase.Began)
-                {
-                    TrySelectPitAtScreenPosition(touch.position);
-                }
-
+                Touch t = Input.GetTouch(0);
+                if (t.phase == TouchPhase.Began) TrySelectPitAtScreenPosition(t.position);
                 return;
             }
 
             if (Input.GetMouseButtonDown(0))
-            {
                 TrySelectPitAtScreenPosition(Input.mousePosition);
-            }
         }
 
-        private void TrySelectPitAtScreenPosition(Vector2 screenPosition)
+        private void TrySelectPitAtScreenPosition(Vector2 screenPos)
         {
-            if (lastHandledInputFrame == Time.frameCount)
-                return;
+            if (lastHandledInputFrame == Time.frameCount) return;
+            inputCamera ??= Camera.main;
+            if (inputCamera == null) return;
 
-            if (inputCamera == null)
-            {
-                inputCamera = Camera.main;
-            }
+            Ray ray = inputCamera.ScreenPointToRay(screenPos);
+            if (!Physics.Raycast(ray, out RaycastHit hit, 100f)) return;
 
-            if (inputCamera == null)
-            {
-                Debug.LogWarning("UIManager: No main camera found for pit raycast input.");
-                return;
-            }
-
-            Ray ray = inputCamera.ScreenPointToRay(screenPosition);
-            if (!Physics.Raycast(ray, out RaycastHit hit, 100f))
-                return;
-
-            PitClickHandler pit = hit.collider.GetComponent<PitClickHandler>();
-            if (pit == null)
-            {
-                pit = hit.collider.GetComponentInParent<PitClickHandler>();
-            }
-
-            if (pit == null)
-                return;
-
-            OnPitClicked(pit.Row, pit.Col);
+            PitClickHandler pit = hit.collider.GetComponent<PitClickHandler>()
+                ?? hit.collider.GetComponentInParent<PitClickHandler>();
+            if (pit != null) OnPitClicked(pit.Row, pit.Col);
         }
 
         private bool IsPointerOverUi()
         {
-            if (EventSystem.current == null)
-                return false;
-
-            if (Input.touchCount > 0)
-            {
-                return EventSystem.current.IsPointerOverGameObject(Input.GetTouch(0).fingerId);
-            }
-
-            return EventSystem.current.IsPointerOverGameObject();
-        }
-
-        private IEnumerator ClearMessageAfterDelay(float seconds)
-        {
-            yield return new WaitForSeconds(seconds);
-
-            if (messageText != null)
-            {
-                messageText.text = string.Empty;
-                messageText.enabled = false;
-            }
-
-            messageCoroutine = null;
-        }
-
-        private void EnsureHud()
-        {
-            if (hudCanvas == null)
-            {
-                hudCanvas = GetComponentInChildren<Canvas>();
-            }
-
-            if (hudCanvas == null)
-            {
-                if (!createDebugHudIfMissing)
-                    return;
-
-                GameObject canvasObject = new GameObject("HUD Canvas");
-                canvasObject.transform.SetParent(transform, false);
-                hudCanvas = canvasObject.AddComponent<Canvas>();
-                hudCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-                canvasObject.AddComponent<CanvasScaler>();
-                canvasObject.AddComponent<GraphicRaycaster>();
-            }
-
-            CanvasScaler scaler = hudCanvas.GetComponent<CanvasScaler>();
-            if (scaler != null)
-            {
-                scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-                scaler.referenceResolution = new Vector2(1920f, 1080f);
-                scaler.matchWidthOrHeight = 0.5f;
-            }
-
-            if (gameStatusText == null)
-            {
-                if (!createDebugHudIfMissing)
-                    return;
-
-                gameStatusText = CreateHudText("Status Text", hudCanvas.transform, "Your turn", 40, TextAlignmentOptions.Center, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -45f), new Vector2(760f, 70f));
-            }
-
-            if (capturedP1Text == null)
-            {
-                if (!createDebugHudIfMissing)
-                    return;
-
-                capturedP1Text = CreateHudText("Player Score Text", hudCanvas.transform, "You captured: 0", 30, TextAlignmentOptions.Left, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(220f, 46f), new Vector2(400f, 56f));
-            }
-
-            if (capturedP2Text == null)
-            {
-                if (!createDebugHudIfMissing)
-                    return;
-
-                capturedP2Text = CreateHudText("AI Score Text", hudCanvas.transform, "AI captured: 0", 30, TextAlignmentOptions.Right, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-230f, -46f), new Vector2(400f, 56f));
-            }
-
-            if (messageText == null)
-            {
-                if (!createDebugHudIfMissing)
-                    return;
-
-                messageText = CreateHudText("Message Text", hudCanvas.transform, string.Empty, 34, TextAlignmentOptions.Center, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 110f), new Vector2(900f, 64f));
-                messageText.enabled = false;
-            }
-        }
-
-        private TMP_Text CreateHudText(string objectName, Transform parent, string text, int fontSize, TextAlignmentOptions alignment, Vector2 anchorMin, Vector2 anchorMax, Vector2 anchoredPosition, Vector2 size)
-        {
-            GameObject textObject = new GameObject(objectName);
-            textObject.transform.SetParent(parent, false);
-
-            TextMeshProUGUI label = textObject.AddComponent<TextMeshProUGUI>();
-            label.text = text;
-            label.fontSize = fontSize;
-            label.alignment = alignment;
-            label.color = Color.white;
-            label.enableWordWrapping = false;
-            label.raycastTarget = false;
-            label.outlineWidth = 0.18f;
-            label.outlineColor = new Color(0f, 0f, 0f, 0.75f);
-
-            RectTransform rect = label.rectTransform;
-            rect.anchorMin = anchorMin;
-            rect.anchorMax = anchorMax;
-            rect.pivot = anchorMin;
-            rect.anchoredPosition = anchoredPosition;
-            rect.sizeDelta = size;
-
-            return label;
-        }
-
-        private void EnsureEventSystem()
-        {
-            if (EventSystem.current != null)
-                return;
-
-            GameObject eventSystemObject = new GameObject("EventSystem");
-            eventSystemObject.AddComponent<EventSystem>();
-            eventSystemObject.AddComponent<StandaloneInputModule>();
+            if (EventSystem.current == null) return false;
+            return Input.touchCount > 0
+                ? EventSystem.current.IsPointerOverGameObject(Input.GetTouch(0).fingerId)
+                : EventSystem.current.IsPointerOverGameObject();
         }
 
         private void SetHoleColor(int row, int col, Color color)
         {
-            Renderer targetRenderer = holeRenderers == null ? null : holeRenderers[row, col];
-            if (targetRenderer == null)
-                return;
-
-            targetRenderer.GetPropertyBlock(propertyBlock);
+            Renderer r = holeRenderers?[row, col];
+            if (r == null) return;
+            r.GetPropertyBlock(propertyBlock);
             propertyBlock.SetColor("_Color", color);
             propertyBlock.SetColor("_BaseColor", color);
-            targetRenderer.SetPropertyBlock(propertyBlock);
+            r.SetPropertyBlock(propertyBlock);
         }
 
         private void ClearHoleColor(int row, int col)
         {
-            Renderer targetRenderer = holeRenderers == null ? null : holeRenderers[row, col];
-            if (targetRenderer == null)
-                return;
-
-            targetRenderer.SetPropertyBlock(null);
+            holeRenderers?[row, col]?.SetPropertyBlock(null);
         }
 
-        private void UpdateHudOnly(GameBoard board, int capturedP1, int capturedP2)
+        private void Log(string msg)
         {
-            if (capturedP1Text != null)
-            {
-                capturedP1Text.text = capturedP1.ToString("00");
-            }
-
-            if (capturedP2Text != null)
-            {
-                capturedP2Text.text = capturedP2.ToString("00");
-            }
-
-            if (gameStatusText != null && board != null)
-            {
-                gameStatusText.text = board.CurrentPlayer == 1 ? "YOUR TURN" : "THINKING...";
-            }
+            if (enableBreadcrumbLogs) Debug.Log($"[UIManager] {msg}", this);
         }
 
-        private string FormatStatus(string message)
-        {
-            if (string.IsNullOrWhiteSpace(message))
-                return string.Empty;
-
-            string lower = message.ToLowerInvariant();
-            if (lower.Contains("ai") || lower.Contains("opponent"))
-                return "THINKING...";
-            if (lower.Contains("your") || lower.Contains("player"))
-                return "YOUR TURN";
-            if (lower.Contains("sowing"))
-                return "SOWING...";
-
-            return message.ToUpperInvariant();
-        }
-
-        private void Log(string message)
-        {
-            if (enableBreadcrumbLogs)
-            {
-                Debug.Log($"[UIManager] {message}", this);
-            }
-        }
+        // Kept for AnimateSowing hook
+        public void AnimateSowing(List<(int r, int c)> sequence) { }
     }
 }

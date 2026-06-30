@@ -48,13 +48,13 @@ namespace NsoloGame.AI
             switch (difficulty)
             {
                 case Difficulty.Easy:
-                    maxDepth = 2;
-                    randomMoveProbability = 0.8f;
+                    maxDepth = 1;
+                    randomMoveProbability = 0.9f;
                     timeBudgetMs = 3000;
                     break;
                 case Difficulty.Medium:
-                    maxDepth = 4;
-                    randomMoveProbability = 0.3f;
+                    maxDepth = 3;
+                    randomMoveProbability = 0.45f;
                     timeBudgetMs = 3000;
                     break;
                 case Difficulty.Hard:
@@ -78,8 +78,8 @@ namespace NsoloGame.AI
             if (cancellationToken.IsCancellationRequested)
                 return null;
 
-            // Easy mode: random move selection
-            if (difficulty == Difficulty.Easy && (float)random.NextDouble() < randomMoveProbability)
+            // Easy/Medium mode: occasionally pick a random legal move instead of searching
+            if (difficulty != Difficulty.Hard && (float)random.NextDouble() < randomMoveProbability)
             {
                 List<Core.Move> legalMoves = gameEngine.GetLegalMoves(board, aiPlayer);
                 if (legalMoves.Count > 0)
@@ -306,7 +306,34 @@ namespace NsoloGame.AI
 
         private int GetMoveKey(Core.Move move, int player)
         {
-            return player * 1000 + move.Row * 12 + move.Col;
+            return player * 1000 + move.Row * 8 + move.Col;
+        }
+
+        /// <summary>
+        /// Deterministic depth-2 search for the hint system. Never picks randomly.
+        /// Evaluates from <paramref name="player"/>'s perspective so it works for both sides.
+        /// </summary>
+        public Core.Move GetHintMove(Core.GameBoard board, int player, CancellationToken ct)
+        {
+            List<Core.Move> legal = gameEngine.GetLegalMoves(board, player);
+            if (legal.Count == 0) return null;
+
+            float bestScore = float.MinValue;
+            Core.Move bestMove = null;
+
+            foreach (var move in legal)
+            {
+                if (ct.IsCancellationRequested) break;
+                Core.MoveResult result = gameEngine.ApplyMoveWithResult(board, move, player);
+                float score = Minimax(result.Board, 2, float.MinValue, float.MaxValue, false, player, 0, ct);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestMove = move;
+                }
+            }
+
+            return bestMove ?? legal[0];
         }
 
         private bool IsSameMove(Core.Move left, Core.Move right)

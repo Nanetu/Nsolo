@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace NsoloGame.Unity
 {
     /// <summary>
-    /// Pure position/layout math for pit and store stones. No MonoBehaviour, no coroutines.
+    /// Pure position/layout math for pit stones. No MonoBehaviour, no coroutines.
     /// Initialized by PitStoneVisualizer in Awake with the serialized settings.
     /// </summary>
     public class StoneLayoutProvider
@@ -15,13 +15,10 @@ namespace NsoloGame.Unity
         public bool UsePitBoundsBottom;
         public float PitBottomYOffset;
         public bool UseCenteredStonePiles;
-        public float StoreBoundsPadding;
-        public float StoreSurfaceYOffset;
         public int RandomSeed;
         public float RandomRotationDegrees;
         public float StoneScale;
         public int PitBottomLayerStoneCount;
-        public int StoreBottomLayerStoneCount;
         public float LayerSpreadFraction;
         public float EffectiveStoneRadius;
 
@@ -96,7 +93,7 @@ namespace NsoloGame.Unity
             Vector3 basePosition = GetPitBasePosition(center);
 
             if (UseCenteredStonePiles)
-                return GetPileStonePosition(basePosition, center.right, center.forward, centeredRadius, centeredRadius, index, random, PitBottomLayerStoneCount);
+                return GetPileStonePosition(basePosition, center.right, center.forward, centeredRadius, centeredRadius, index, total, random, PitBottomLayerStoneCount);
 
             Vector2 offset = GetScatterOffset(index, total, scatterRadius, random);
             return basePosition + center.right * offset.x + center.forward * offset.y;
@@ -104,18 +101,38 @@ namespace NsoloGame.Unity
 
         /// <summary>
         /// Places stone <paramref name="index"/> in an explicit layer stack.
-        /// Stones are sorted into layers of <paramref name="bottomLayerCount"/> each (layer 0 = floor).
-        /// Within each layer stones are arranged in a geometric formation spread across the footprint.
+        /// The bottom layer holds up to <paramref name="bottomLayerCount"/> stones (default 4) in a
+        /// deterministic formation keyed off how many stones actually occupy that layer: 1 = a single
+        /// centered spot, 2 = a line, 3 = a triangle, 4 = a square. Anything beyond the bottom layer
+        /// stacks centered directly on top as a placeholder column — a dedicated "too many stones to
+        /// show individually" representation is a separate follow-up.
         /// </summary>
-        public Vector3 GetPileStonePosition(Vector3 basePosition, Vector3 right, Vector3 forward, float radiusX, float radiusZ, int index, System.Random random, int bottomLayerCount)
+        public Vector3 GetPileStonePosition(Vector3 basePosition, Vector3 right, Vector3 forward, float radiusX, float radiusZ, int index, int totalStones, System.Random random, int bottomLayerCount)
         {
+            bottomLayerCount = Mathf.Max(1, bottomLayerCount);
+
             float diameter = EffectiveStoneRadius * 2f;
             float layerStep = diameter * 0.82f;
 
             int layer = index / bottomLayerCount;
             int indexInLayer = index % bottomLayerCount;
 
-            Vector2 offset = GetLayerFormationOffset(indexInLayer, bottomLayerCount, radiusX, radiusZ);
+            Vector2 offset;
+            float overflowStack = 0f;
+
+            if (layer == 0)
+            {
+                // The bottom layer's true occupancy (1-4 stones), not an assumed-full layer —
+                // this is what makes 1/2/3/4 stones render as spot/line/triangle/square.
+                int bottomLayerSize = Mathf.Clamp(totalStones, 1, bottomLayerCount);
+                offset = GetLayerFormationOffset(indexInLayer, bottomLayerSize, radiusX, radiusZ);
+            }
+            else
+            {
+                // Overflow beyond the bottom layer: stack centered on top of the pile.
+                offset = Vector2.zero;
+                overflowStack = indexInLayer * diameter * 0.55f;
+            }
 
             float jx = (float)(random.NextDouble() - 0.5) * diameter * 0.08f;
             float jz = (float)(random.NextDouble() - 0.5) * diameter * 0.08f;
@@ -124,7 +141,7 @@ namespace NsoloGame.Unity
             return basePosition
                 + right * (offset.x + jx)
                 + forward * (offset.y + jz)
-                + Vector3.up * (layer * layerStep + jy);
+                + Vector3.up * (layer * layerStep + overflowStack + jy);
         }
 
         /// <summary>
@@ -150,50 +167,6 @@ namespace NsoloGame.Unity
             return new Vector2(
                 colFrac * 2f * radiusX * LayerSpreadFraction,
                 rowFrac * 2f * radiusZ * LayerSpreadFraction);
-        }
-
-        /// <param name="total">Total stones being placed in this store, used to scale the scatter radius correctly.</param>
-        public Vector3 GetStoreStonePosition(Transform store, int index, int total)
-        {
-            Bounds bounds = GetWorldBounds(store);
-            Vector3 right = store.right;
-            Vector3 forward = store.forward;
-
-            GetProjectedExtents(bounds, right, out float rightMin, out float rightMax);
-            GetProjectedExtents(bounds, forward, out float forwardMin, out float forwardMax);
-
-            // Half-extents minus one padding each side. Minimum ensures scatter still works
-            // even when the store has no Collider/Renderer (GetWorldBounds fallback).
-            float rightRadius = Mathf.Max(EffectiveStoneRadius * 3f, (rightMax - rightMin) * 0.5f - StoreBoundsPadding);
-            float forwardRadius = Mathf.Max(EffectiveStoneRadius * 3f, (forwardMax - forwardMin) * 0.5f - StoreBoundsPadding);
-
-            Vector3 basePosition = new Vector3(bounds.center.x, bounds.min.y + StoreSurfaceYOffset, bounds.center.z);
-
-            int stonesPerLayer = StoreBottomLayerStoneCount;
-            int layer = index / stonesPerLayer;
-            int indexInLayer = index % stonesPerLayer;
-            int totalInLayer = Mathf.Min(stonesPerLayer, total - layer * stonesPerLayer);
-
-            float diameter = EffectiveStoneRadius * 2f;
-            float layerStep = diameter * 0.82f;
-
-            // Use golden-ratio scatter so stones spread across the store footprint rather than
-            // clustering at the centre (the pile formation + layerSpreadFraction used for pits
-            // collapses positions to within a few mm when layerSpreadFraction is small).
-            System.Random random = new System.Random(RandomSeed + index * 31);
-
-            float goldenAngle = 137.508f * Mathf.Deg2Rad;
-            float normalizedIdx = (indexInLayer + 0.5f) / Mathf.Max(totalInLayer, 1);
-            float dist = Mathf.Sqrt(normalizedIdx) * RandomRange(random, 0.35f, 0.95f);
-            float angle = indexInLayer * goldenAngle + RandomRange(random, -0.45f, 0.45f);
-
-            float offsetRight = Mathf.Cos(angle) * dist * rightRadius;
-            float offsetForward = Mathf.Sin(angle) * dist * forwardRadius;
-
-            return basePosition
-                + right * offsetRight
-                + forward * offsetForward
-                + Vector3.up * (layer * layerStep);
         }
 
         public bool IsOverlapping(Vector3 position, List<GameObject> existingStones, float minDistanceSqr)

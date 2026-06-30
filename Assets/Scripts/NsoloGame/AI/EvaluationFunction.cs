@@ -7,8 +7,7 @@ namespace NsoloGame.AI
     public class EvaluationFunction
     {
         // Configurable weights for different evaluation components
-        public float WeightStoneDiff { get; set; } = 0.15f;
-        public float WeightCapDiff { get; set; } = 0.40f;
+        public float WeightStoneDiff { get; set; } = 0.55f;
         public float WeightMobility { get; set; } = 0.20f;
         public float WeightCapThreat { get; set; } = 0.15f;
         public float WeightRelay { get; set; } = 0.10f;
@@ -28,27 +27,23 @@ namespace NsoloGame.AI
         {
             float score = 0f;
 
-            // 1. Stone difference (own stones - opponent stones)
+            // 1. Stone difference (own stones - opponent stones). Captured stones are folded
+            // straight into a player's own pit total (see GameEngine's capture rule), so this
+            // single signal already captures both raw stone count and capture advantage.
             int playerStones = gameEngine.GetPlayerStones(board, player);
             int opponentStones = gameEngine.GetPlayerStones(board, 3 - player);
             float stoneDiff = playerStones - opponentStones;
             score += WeightStoneDiff * stoneDiff;
 
-            // 2. Capture difference (captured by player - captured by opponent)
-            int playerCaptured = player == 1 ? board.CapturedP1 : board.CapturedP2;
-            int opponentCaptured = player == 1 ? board.CapturedP2 : board.CapturedP1;
-            float capDiff = playerCaptured - opponentCaptured;
-            score += WeightCapDiff * capDiff;
+            // 2. Mobility (number of legal moves available, i.e. own pits with >= 2 stones)
+            int mobility = GetMobility(board, player);
+            score += WeightMobility * mobility;
 
-            // 3. Inner row mobility (number of playable holes in inner row)
-            int innerRowMobility = GetInnerRowMobility(board, player);
-            score += WeightMobility * innerRowMobility;
-
-            // 4. Capture threat score (potential captures available)
+            // 3. Capture threat score (potential captures available)
             float capThreat = GetCaptureThreatScore(board, player);
             score += WeightCapThreat * capThreat;
 
-            // 5. Relay potential (holes with many stones)
+            // 4. Relay/board-density potential
             float relayPotential = GetRelayPotential(board, player);
             score += WeightRelay * relayPotential;
 
@@ -56,24 +51,29 @@ namespace NsoloGame.AI
         }
 
         /// <summary>
-        /// Count playable holes (>= 1 stone) in player's inner row.
+        /// Count playable holes (>= 2 stones, the legal-move threshold) across both of the player's rows.
         /// </summary>
-        private int GetInnerRowMobility(Core.GameBoard board, int player)
+        private int GetMobility(Core.GameBoard board, int player)
         {
-            int innerRow = player == 1 ? 1 : 2;
+            int[] rows = player == 1 ? new[] { 0, 1 } : new[] { 2, 3 };
             int count = 0;
 
-            for (int c = 0; c < 12; c++)
+            foreach (int r in rows)
             {
-                if (board.Get(innerRow, c) >= 1)
-                    count++;
+                for (int c = 0; c < Core.GameBoard.Cols; c++)
+                {
+                    if (board.Get(r, c) >= 2)
+                        count++;
+                }
             }
 
             return count;
         }
 
         /// <summary>
-        /// Score based on potential captures in the inner row.
+        /// Score based on potential captures: a capture requires landing on a non-empty inner-row pit
+        /// while BOTH of the opponent's same-column pits (inner and outer) are occupied. Only count
+        /// the threat when the player's own inner pit at that column is occupied (a legal landing spot).
         /// </summary>
         private float GetCaptureThreatScore(Core.GameBoard board, int player)
         {
@@ -82,19 +82,18 @@ namespace NsoloGame.AI
             int opponentInnerRow = player == 1 ? 2 : 1;
             int opponentOuterRow = player == 1 ? 3 : 0;
 
-            for (int c = 0; c < 12; c++)
+            for (int c = 0; c < Core.GameBoard.Cols; c++)
             {
+                if (board.Get(playerInnerRow, c) < 1)
+                    continue;
+
                 int opponentInnerStones = board.Get(opponentInnerRow, c);
-                if (opponentInnerStones > 0)
+                int opponentOuterStones = board.Get(opponentOuterRow, c);
+
+                if (opponentInnerStones >= 1 && opponentOuterStones >= 1)
                 {
-                    // Threat if we have a hole with stones that could land on empty inner hole.
-                    // Outer row only adds to the threat if the inner row has stones to capture,
-                    // matching the actual capture rule (no capture if inner row is empty).
-                    if (board.Get(playerInnerRow, c) >= 1)
-                    {
-                        int opponentStones = opponentInnerStones + board.Get(opponentOuterRow, c);
-                        threat += opponentStones * 0.1f;
-                    }
+                    int opponentStones = opponentInnerStones + opponentOuterStones;
+                    threat += opponentStones * 0.1f;
                 }
             }
 
@@ -102,7 +101,9 @@ namespace NsoloGame.AI
         }
 
         /// <summary>
-        /// Score relay potential (holes with many stones that could trigger relay).
+        /// Density proxy for relay/capture chain potential: more occupied pits on the player's own
+        /// side means a sown stone is more likely to land on a non-empty pit and chain via relay or
+        /// capture instead of immediately ending the turn (Rule 1).
         /// </summary>
         private float GetRelayPotential(Core.GameBoard board, int player)
         {
@@ -111,13 +112,10 @@ namespace NsoloGame.AI
 
             foreach (int r in playerRows)
             {
-                for (int c = 0; c < 12; c++)
+                for (int c = 0; c < Core.GameBoard.Cols; c++)
                 {
-                    int stones = board.Get(r, c);
-                    if (stones > 12)  // Holes with more than a full lap
-                    {
-                        potential += (stones - 12) * 0.05f;
-                    }
+                    if (board.Get(r, c) >= 1)
+                        potential += 0.05f;
                 }
             }
 

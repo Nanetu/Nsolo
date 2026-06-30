@@ -6,7 +6,7 @@ namespace NsoloGame.Core
     /// </summary>
     public class SowingPath
     {
-        private const int PathLength = 24;
+        private const int PathLength = 16;
         private readonly (int r, int c)[] player1Path;
         private readonly (int r, int c)[] player2Path;
 
@@ -18,23 +18,23 @@ namespace NsoloGame.Core
             player2Path = new (int, int)[PathLength];
 
             int index = 0;
-            for (int c = 0; c < 12; c++)
+            for (int c = 0; c < 8; c++)
             {
                 player1Path[index++] = (0, c);
             }
 
-            for (int c = 11; c >= 0; c--)
+            for (int c = 7; c >= 0; c--)
             {
                 player1Path[index++] = (1, c);
             }
 
             index = 0;
-            for (int c = 0; c < 12; c++)
+            for (int c = 0; c < 8; c++)
             {
                 player2Path[index++] = (2, c);
             }
 
-            for (int c = 11; c >= 0; c--)
+            for (int c = 7; c >= 0; c--)
             {
                 player2Path[index++] = (3, c);
             }
