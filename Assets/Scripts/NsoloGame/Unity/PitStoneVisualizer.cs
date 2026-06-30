@@ -13,9 +13,7 @@ namespace NsoloGame.Unity
     public class PitStoneVisualizer : MonoBehaviour
     {
         [Header("Scene References")]
-        [SerializeField] private GameObject[] holes = new GameObject[48];
-        [SerializeField] private Transform storeP1;
-        [SerializeField] private Transform storeP2;
+        [SerializeField] private GameObject[] holes = new GameObject[32];
 
         [Header("Stone Prefab")]
         [SerializeField] private GameObject stonePrefab;
@@ -31,17 +29,10 @@ namespace NsoloGame.Unity
         [SerializeField] private float stoneScale = 1f;
         [SerializeField] private int maxVisualStonesPerPit = 12;
 
-        [Header("Store Placement")]
-        [SerializeField] private float storeBoundsPadding = 0.18f;
-        [SerializeField] private float storeSurfaceYOffset = 0.045f;
-        [SerializeField] private int maxVisualStonesPerStore = 48;
-
         [Header("Pile Stacking")]
-        [Tooltip("How many stones settle into a pit's bottom layer before later stones start piling on top.")]
+        [Tooltip("How many stones settle into a pit's bottom layer (as spot/line/triangle/square) before later stones start stacking on top.")]
         [SerializeField] private int pitBottomLayerStoneCount = 4;
-        [Tooltip("How many stones settle into a store's bottom layer before later stones start piling on top.")]
-        [SerializeField] private int storeBottomLayerStoneCount = 12;
-        [Tooltip("Fraction of the pit/store footprint radius used for stone spread within each layer.")]
+        [Tooltip("Fraction of the pit footprint radius used for stone spread within each layer.")]
         [SerializeField] private float layerSpreadFraction = 0.15f;
 
         [Header("Scatter Randomness")]
@@ -66,9 +57,7 @@ namespace NsoloGame.Unity
         private float effectiveStoneRadius = 0.02f;
 
         private readonly List<GameObject> spawnedStones = new List<GameObject>();
-        private readonly List<GameObject>[,] stonesByPit = new List<GameObject>[4, 12];
-        private readonly List<GameObject> storeP1Stones = new List<GameObject>();
-        private readonly List<GameObject> storeP2Stones = new List<GameObject>();
+        private readonly List<GameObject>[,] stonesByPit = new List<GameObject>[4, 8];
 
         private StoneLayoutProvider layout;
         private PitStoneAnimator animator;
@@ -90,7 +79,7 @@ namespace NsoloGame.Unity
             }
 
             for (int r = 0; r < 4; r++)
-                for (int c = 0; c < 12; c++)
+                for (int c = 0; c < 8; c++)
                     stonesByPit[r, c] = new List<GameObject>();
 
             if (audioSource == null)
@@ -108,13 +97,10 @@ namespace NsoloGame.Unity
                 UsePitBoundsBottom = usePitBoundsBottom,
                 PitBottomYOffset = pitBottomYOffset,
                 UseCenteredStonePiles = useCenteredStonePiles,
-                StoreBoundsPadding = storeBoundsPadding,
-                StoreSurfaceYOffset = storeSurfaceYOffset,
                 RandomSeed = randomSeed,
                 RandomRotationDegrees = randomRotationDegrees,
                 StoneScale = stoneScale,
                 PitBottomLayerStoneCount = pitBottomLayerStoneCount,
-                StoreBottomLayerStoneCount = storeBottomLayerStoneCount,
                 LayerSpreadFraction = layerSpreadFraction,
             };
 
@@ -163,10 +149,10 @@ namespace NsoloGame.Unity
             for (int i = 0; i < holes.Length && i < sceneHoles.Length; i++)
                 holes[i] = sceneHoles[i];
 
-            Log($"SetHoles() complete. Assigned holes: {CountAssignedHoles()}/48.");
+            Log($"SetHoles() complete. Assigned holes: {CountAssignedHoles()}/32.");
         }
 
-        public void Refresh(GameBoard board, int capturedP1, int capturedP2)
+        public void Refresh(GameBoard board)
         {
             Log("Refresh() called.");
 
@@ -182,15 +168,15 @@ namespace NsoloGame.Unity
                 return;
             }
 
-            Log($"Board total stones before spawn: {CountBoardStones(board)}. Captured P1={capturedP1}, Captured P2={capturedP2}.");
-            Log($"Assigned holes before spawn: {CountAssignedHoles()}/48.");
+            Log($"Board total stones before spawn: {CountBoardStones(board)}.");
+            Log($"Assigned holes before spawn: {CountAssignedHoles()}/32.");
 
             ClearStones();
 
-            int spawnedBeforeStores = 0;
+            int spawnedCount = 0;
             for (int r = 0; r < 4; r++)
             {
-                for (int c = 0; c < 12; c++)
+                for (int c = 0; c < 8; c++)
                 {
                     Transform pit = GetPitTransform(r, c);
                     if (pit == null)
@@ -200,18 +186,11 @@ namespace NsoloGame.Unity
                     }
 
                     int spawned = SpawnPitStoneGroup(pit, board.Get(r, c), maxVisualStonesPerPit, r, c, stonesByPit[r, c]);
-                    spawnedBeforeStores += spawned;
+                    spawnedCount += spawned;
                 }
             }
 
-            Log($"Pit loop complete. Spawned {spawnedBeforeStores} pit stones.");
-
-            if (storeP1 != null)
-                SpawnStoreStoneGroup(storeP1, capturedP1, maxVisualStonesPerStore, storeP1Stones);
-
-            if (storeP2 != null)
-                SpawnStoreStoneGroup(storeP2, capturedP2, maxVisualStonesPerStore, storeP2Stones);
-
+            Log($"Pit loop complete. Spawned {spawnedCount} pit stones.");
             Log($"Refresh() complete. Total runtime stones now tracked: {spawnedStones.Count}.");
         }
 
@@ -225,7 +204,7 @@ namespace NsoloGame.Unity
 
         internal Transform GetPitTransform(int row, int col)
         {
-            int index = row * 12 + col;
+            int index = row * 8 + col;
             if (holes[index] == null)
                 holes[index] = GameObject.Find($"Hole_{row}_{col}");
 
@@ -259,6 +238,7 @@ namespace NsoloGame.Unity
 
                 GameObject stone = Instantiate(stonePrefab, position, rotation, spawnedStoneRoot);
                 stone.transform.localScale = stone.transform.localScale * stoneScale;
+                DisableColliders(stone);
                 spawnedStones.Add(stone);
                 targetList.Add(stone);
             }
@@ -267,30 +247,15 @@ namespace NsoloGame.Unity
             return visualCount;
         }
 
-        private int SpawnStoreStoneGroup(Transform center, int count, int maxVisualCount, List<GameObject> targetList)
+        /// <summary>
+        /// Spawned stones must never intercept the board's pit-click raycasts — a stone sitting
+        /// on top of a pit can otherwise occlude the raycast to pits further from the camera
+        /// (e.g. the inner row sitting behind the outer row's stones).
+        /// </summary>
+        private void DisableColliders(GameObject stone)
         {
-            int visualCount = Mathf.Min(count, maxVisualCount);
-            if (count <= 0)
-            {
-                Log($"SpawnStoreStoneGroup({center.name}) count is 0. No stones spawned.");
-                return 0;
-            }
-
-            System.Random random = new System.Random(randomSeed + count * 7);
-
-            for (int i = 0; i < visualCount; i++)
-            {
-                Vector3 position = layout.GetStoreStonePosition(center, i, visualCount);
-                Quaternion rotation = layout.RandomRotation(random);
-
-                GameObject stone = Instantiate(stonePrefab, position, rotation, spawnedStoneRoot);
-                stone.transform.localScale = stone.transform.localScale * stoneScale;
-                spawnedStones.Add(stone);
-                targetList.Add(stone);
-            }
-
-            Log($"SpawnStoreStoneGroup({center.name}) requested={count}, spawned={visualCount}.");
-            return visualCount;
+            foreach (Collider collider in stone.GetComponentsInChildren<Collider>())
+                collider.enabled = false;
         }
 
         private void ClearStones()
@@ -322,11 +287,8 @@ namespace NsoloGame.Unity
         private void ClearStoneLists()
         {
             for (int r = 0; r < 4; r++)
-                for (int c = 0; c < 12; c++)
+                for (int c = 0; c < 8; c++)
                     stonesByPit[r, c]?.Clear();
-
-            storeP1Stones.Clear();
-            storeP2Stones.Clear();
         }
 
         private int CountAssignedHoles()
@@ -343,10 +305,64 @@ namespace NsoloGame.Unity
         {
             int total = 0;
             for (int r = 0; r < 4; r++)
-                for (int c = 0; c < 12; c++)
+                for (int c = 0; c < 8; c++)
                     total += board.Get(r, c);
 
             return total;
+        }
+
+        /// <summary>
+        /// Pulses a warm gold glow on the stones in the given pit once, then fades out.
+        /// Called by UIManager when a hint result arrives.
+        /// </summary>
+        public IEnumerator FlashHintGlow(int row, int col)
+        {
+            List<GameObject> pitStones = stonesByPit[row, col];
+            if (pitStones == null || pitStones.Count == 0) yield break;
+
+            var renderers = new List<Renderer>();
+            foreach (var stone in pitStones)
+            {
+                if (stone == null) continue;
+                Renderer r = stone.GetComponentInChildren<Renderer>();
+                if (r != null) renderers.Add(r);
+            }
+            if (renderers.Count == 0) yield break;
+
+            Color glowColor = new Color(1f, 0.78f, 0.18f);
+
+            // Enable emission
+            foreach (var r in renderers)
+            {
+                if (r == null) continue;
+                r.material.EnableKeyword("_EMISSION");
+                r.material.SetColor("_EmissionColor", glowColor * 2.5f);
+            }
+
+            yield return new WaitForSeconds(0.45f);
+
+            // Fade out over 0.4s
+            float fadeTime = 0.4f;
+            float elapsed = 0f;
+            while (elapsed < fadeTime)
+            {
+                elapsed += Time.deltaTime;
+                float t = 1f - Mathf.Clamp01(elapsed / fadeTime);
+                Color c = glowColor * (2.5f * t);
+                foreach (var r in renderers)
+                {
+                    if (r != null) r.material.SetColor("_EmissionColor", c);
+                }
+                yield return null;
+            }
+
+            // Clear
+            foreach (var r in renderers)
+            {
+                if (r == null) continue;
+                r.material.SetColor("_EmissionColor", Color.black);
+                r.material.DisableKeyword("_EMISSION");
+            }
         }
 
         private void Log(string message)

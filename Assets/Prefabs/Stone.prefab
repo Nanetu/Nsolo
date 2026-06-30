@@ -1,6 +1,6 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
---- !u!1001 &8968550909386312717
+--- !u!1001 &4700312397598420108
 PrefabInstance:
   m_ObjectHideFlags: 0
   serializedVersion: 2
@@ -22,11 +22,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 61b5589036235bd4b9719bb7a87b4b28, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -1.9560555
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 61b5589036235bd4b9719bb7a87b4b28, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0.69215345
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 61b5589036235bd4b9719bb7a87b4b28, type: 3}
       propertyPath: m_LocalPosition.z
@@ -34,19 +34,19 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 61b5589036235bd4b9719bb7a87b4b28, type: 3}
       propertyPath: m_LocalRotation.w
-      value: 0.74291414
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 61b5589036235bd4b9719bb7a87b4b28, type: 3}
       propertyPath: m_LocalRotation.x
-      value: -0.012571343
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 61b5589036235bd4b9719bb7a87b4b28, type: 3}
       propertyPath: m_LocalRotation.y
-      value: 0.013957711
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 61b5589036235bd4b9719bb7a87b4b28, type: 3}
       propertyPath: m_LocalRotation.z
-      value: -0.6691231
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 61b5589036235bd4b9719bb7a87b4b28, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -60,10 +60,6 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
-    - target: {fileID: -5754084199372789682, guid: 61b5589036235bd4b9719bb7a87b4b28, type: 3}
-      propertyPath: m_Mesh
-      value: 
-      objectReference: {fileID: -915661510970944972, guid: 61b5589036235bd4b9719bb7a87b4b28, type: 3}
     - target: {fileID: 919132149155446097, guid: 61b5589036235bd4b9719bb7a87b4b28, type: 3}
       propertyPath: m_Name
       value: Stone

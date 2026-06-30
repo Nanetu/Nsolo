@@ -7,10 +7,18 @@ namespace NsoloGame.Core
         public (int r, int c) Source { get; }
         public List<(int r, int c)> Landings { get; }
 
-        public SowingSegment((int r, int c) source, List<(int r, int c)> landings)
+        /// <summary>
+        /// Additional pits whose stones are scooped into this same segment alongside <see cref="Source"/>.
+        /// Used for captures, where stones are gathered from the landing pit and both of the opponent's
+        /// same-column pits before being resown as a single group.
+        /// </summary>
+        public List<(int r, int c)> ExtraSources { get; }
+
+        public SowingSegment((int r, int c) source, List<(int r, int c)> landings, List<(int r, int c)> extraSources = null)
         {
             Source = source;
             Landings = landings;
+            ExtraSources = extraSources ?? new List<(int r, int c)>();
         }
     }
 

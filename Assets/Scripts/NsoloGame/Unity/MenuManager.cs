@@ -1,18 +1,17 @@
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace NsoloGame.Unity
 {
-    /// <summary>
-    /// Owns the top-level UI panel flow for menu, tutorial, difficulty, pause, and game-over screens.
-    /// Button OnClick events can call the public methods on this component directly.
-    /// </summary>
     public class MenuManager : MonoBehaviour
     {
         [Header("Panels")]
         [SerializeField] private GameObject welcomePanel;
         [SerializeField] private GameObject tutorialPanel;
         [SerializeField] private GameObject difficultyPanel;
+        [SerializeField] private GameObject settingsPanel;
+        [SerializeField] private GameObject profilePanel;
         [SerializeField] private GameObject pausePanel;
         [SerializeField] private GameObject gameOverPanel;
 
@@ -20,13 +19,30 @@ namespace NsoloGame.Unity
         [SerializeField] private GameController gameController;
         [SerializeField] private GameObject gameplayRoot;
 
+        [Header("Difficulty Selection")]
+        [SerializeField] private GameObject easySelectionHighlight;
+        [SerializeField] private GameObject mediumSelectionHighlight;
+        [SerializeField] private GameObject hardSelectionHighlight;
+        [SerializeField] private Button startGameButton;
+
+        [Header("Pause — Settings")]
+        [SerializeField] private Slider musicVolumeSlider;
+        [SerializeField] private Slider sfxVolumeSlider;
+        [SerializeField] private Toggle vibrationToggle;
+        [SerializeField] private TMP_Text musicVolumeLabel;
+        [SerializeField] private TMP_Text sfxVolumeLabel;
+
         [Header("Game Over Text")]
         [SerializeField] private TMP_Text gameOverTitleText;
         [SerializeField] private TMP_Text finalPlayerCapturedText;
         [SerializeField] private TMP_Text finalAiCapturedText;
 
+        // Fired whenever the SFX slider changes so PitStoneVisualizer can update its volume
+        public static event System.Action<float> SFXVolumeChanged;
+
         private bool isPaused;
         private bool subscribedToGameOver;
+        private int selectedDifficulty = -1;
 
         private void Awake()
         {
@@ -50,19 +66,18 @@ namespace NsoloGame.Unity
 
         private void Start()
         {
+            InitSettingsSliders();
             ShowWelcome();
         }
+
+        // ── Welcome Panel ─────────────────────────────────────────────────
 
         public void ShowWelcome()
         {
             Time.timeScale = 1f;
             isPaused = false;
             ResolveGameController();
-            if (gameController != null)
-            {
-                gameController.SetPaused(false);
-            }
-
+            gameController?.SetPaused(false);
             SetGameplayVisible(false);
             ShowOnly(welcomePanel);
         }
@@ -73,31 +88,59 @@ namespace NsoloGame.Unity
             ShowOnly(tutorialPanel);
         }
 
+        public void ShowSettings()
+        {
+            SetGameplayVisible(false);
+            ShowOnly(settingsPanel);
+        }
+
+        public void ShowProfile()
+        {
+            ProfileManager.Instance?.RefreshProfileUI();
+            SetGameplayVisible(false);
+            ShowOnly(profilePanel);
+        }
+
+        // ── Difficulty Panel ──────────────────────────────────────────────
+
         public void ShowDifficulty()
         {
             SetGameplayVisible(false);
             ShowOnly(difficultyPanel);
+            ResetDifficultySelection();
         }
 
-        public void BackToWelcome()
+        public void SelectEasy()   => ApplyDifficultySelection(0);
+        public void SelectMedium() => ApplyDifficultySelection(1);
+        public void SelectHard()   => ApplyDifficultySelection(2);
+
+        private void ApplyDifficultySelection(int difficulty)
         {
-            ShowWelcome();
+            selectedDifficulty = difficulty;
+            SetActive(easySelectionHighlight,   difficulty == 0);
+            SetActive(mediumSelectionHighlight, difficulty == 1);
+            SetActive(hardSelectionHighlight,   difficulty == 2);
+            if (startGameButton != null) startGameButton.interactable = true;
         }
 
-        public void StartEasyGame()
+        private void ResetDifficultySelection()
         {
-            StartGame(0);
+            selectedDifficulty = -1;
+            SetActive(easySelectionHighlight,   false);
+            SetActive(mediumSelectionHighlight, false);
+            SetActive(hardSelectionHighlight,   false);
+            if (startGameButton != null) startGameButton.interactable = false;
         }
 
-        public void StartMediumGame()
+        public void StartSelectedGame()
         {
-            StartGame(1);
+            if (selectedDifficulty < 0) return;
+            StartGame(selectedDifficulty);
         }
 
-        public void StartHardGame()
-        {
-            StartGame(2);
-        }
+        public void BackToWelcome() => ShowWelcome();
+
+        // ── Gameplay ──────────────────────────────────────────────────────
 
         public void StartGame(int difficulty)
         {
@@ -110,11 +153,20 @@ namespace NsoloGame.Unity
 
             if (gameController == null)
             {
-                Debug.LogError("MenuManager: Cannot start game because GameController is not assigned.");
+                Debug.LogError("MenuManager: GameController not assigned.");
                 return;
             }
 
             gameController.StartNewGame(difficulty);
+        }
+
+        /// <summary>
+        /// Hook for the pre-game formation phase's Ready button (wire this up in the scene).
+        /// </summary>
+        public void OnReadyButtonPressed()
+        {
+            ResolveGameController();
+            gameController?.ConfirmFormationReady();
         }
 
         public void TogglePause()
@@ -130,15 +182,10 @@ namespace NsoloGame.Unity
 
         public void ResumeGame()
         {
-            if (!isPaused)
-                return;
-
+            if (!isPaused) return;
             isPaused = false;
             Time.timeScale = 1f;
-            if (gameController != null)
-            {
-                gameController.SetPaused(false);
-            }
+            gameController?.SetPaused(false);
             SetPanelActive(pausePanel, false);
         }
 
@@ -148,17 +195,73 @@ namespace NsoloGame.Unity
             isPaused = false;
             HideAllPanels();
             SetGameplayVisible(true);
-
-            if (gameController != null)
-            {
-                gameController.RestartGame();
-            }
+            gameController?.RestartGame();
         }
 
-        public void MainMenu()
+        public void MainMenu() => ShowWelcome();
+
+        // ── Pause Settings ────────────────────────────────────────────────
+
+        private void InitSettingsSliders()
         {
-            ShowWelcome();
+            float music = PlayerPrefs.GetFloat("MusicVolume", 0.7f);
+            float sfx   = PlayerPrefs.GetFloat("SFXVolume",   0.85f);
+            bool vib    = PlayerPrefs.GetInt("Vibration", 1) == 1;
+
+            AudioListener.volume = music;
+
+            if (musicVolumeSlider != null)
+            {
+                musicVolumeSlider.value = music;
+                musicVolumeSlider.onValueChanged.AddListener(OnMusicVolumeChanged);
+            }
+            if (sfxVolumeSlider != null)
+            {
+                sfxVolumeSlider.value = sfx;
+                sfxVolumeSlider.onValueChanged.AddListener(OnSFXVolumeChanged);
+            }
+            if (vibrationToggle != null)
+            {
+                vibrationToggle.isOn = vib;
+                vibrationToggle.onValueChanged.AddListener(OnVibrationToggled);
+            }
+
+            UpdateSettingsLabels(music, sfx);
         }
+
+        public void OnMusicVolumeChanged(float value)
+        {
+            AudioListener.volume = value;
+            PlayerPrefs.SetFloat("MusicVolume", value);
+            PlayerPrefs.Save();
+            if (musicVolumeLabel != null)
+                musicVolumeLabel.text = $"[{Mathf.RoundToInt(value * 100)}%]";
+        }
+
+        public void OnSFXVolumeChanged(float value)
+        {
+            PlayerPrefs.SetFloat("SFXVolume", value);
+            PlayerPrefs.Save();
+            if (sfxVolumeLabel != null)
+                sfxVolumeLabel.text = $"[{Mathf.RoundToInt(value * 100)}%]";
+            SFXVolumeChanged?.Invoke(value);
+        }
+
+        public void OnVibrationToggled(bool value)
+        {
+            PlayerPrefs.SetInt("Vibration", value ? 1 : 0);
+            PlayerPrefs.Save();
+        }
+
+        private void UpdateSettingsLabels(float music, float sfx)
+        {
+            if (musicVolumeLabel != null)
+                musicVolumeLabel.text = $"[{Mathf.RoundToInt(music * 100)}%]";
+            if (sfxVolumeLabel != null)
+                sfxVolumeLabel.text = $"[{Mathf.RoundToInt(sfx * 100)}%]";
+        }
+
+        // ── Game Over ─────────────────────────────────────────────────────
 
         private void HandleGameOver(int winner, int playerCaptured, int aiCaptured)
         {
@@ -168,22 +271,16 @@ namespace NsoloGame.Unity
             SetGameplayVisible(true);
 
             if (gameOverTitleText != null)
-            {
                 gameOverTitleText.text = winner == 1 ? "VICTORY" : "DEFEAT";
-            }
-
             if (finalPlayerCapturedText != null)
-            {
                 finalPlayerCapturedText.text = playerCaptured.ToString();
-            }
-
             if (finalAiCapturedText != null)
-            {
                 finalAiCapturedText.text = aiCaptured.ToString();
-            }
 
             SetPanelActive(gameOverPanel, true);
         }
+
+        // ── Helpers ───────────────────────────────────────────────────────
 
         private void ShowOnly(GameObject panel)
         {
@@ -193,50 +290,42 @@ namespace NsoloGame.Unity
 
         private void HideAllPanels()
         {
-            SetPanelActive(welcomePanel, false);
-            SetPanelActive(tutorialPanel, false);
+            SetPanelActive(welcomePanel,    false);
+            SetPanelActive(tutorialPanel,   false);
             SetPanelActive(difficultyPanel, false);
-            SetPanelActive(pausePanel, false);
-            SetPanelActive(gameOverPanel, false);
+            SetPanelActive(settingsPanel,   false);
+            SetPanelActive(profilePanel,    false);
+            SetPanelActive(pausePanel,      false);
+            SetPanelActive(gameOverPanel,   false);
         }
 
         private void SetPanelActive(GameObject panel, bool active)
         {
-            if (panel != null)
-            {
-                panel.SetActive(active);
-            }
+            if (panel != null) panel.SetActive(active);
+        }
+
+        private void SetActive(GameObject obj, bool active)
+        {
+            if (obj != null) obj.SetActive(active);
         }
 
         private void SetGameplayVisible(bool visible)
         {
-            if (gameplayRoot != null)
-            {
-                gameplayRoot.SetActive(visible);
-            }
+            if (gameplayRoot != null) gameplayRoot.SetActive(visible);
         }
 
         private void ResolveGameController()
         {
-            if (gameController != null)
-                return;
-
+            if (gameController != null) return;
             gameController = FindObjectOfType<GameController>();
-            if (gameController != null)
-                return;
-
-            GameController[] controllers = Resources.FindObjectsOfTypeAll<GameController>();
-            if (controllers.Length > 0)
-            {
-                gameController = controllers[0];
-            }
+            if (gameController != null) return;
+            var all = Resources.FindObjectsOfTypeAll<GameController>();
+            if (all.Length > 0) gameController = all[0];
         }
 
         private void SubscribeToGameOver()
         {
-            if (gameController == null || subscribedToGameOver)
-                return;
-
+            if (gameController == null || subscribedToGameOver) return;
             gameController.GameOver += HandleGameOver;
             subscribedToGameOver = true;
         }

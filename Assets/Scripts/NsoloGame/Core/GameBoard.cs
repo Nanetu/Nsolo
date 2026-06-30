@@ -2,15 +2,17 @@ namespace NsoloGame.Core
 {
     /// <summary>
     /// Represents the Nsolo game board state.
-    /// 4 rows x 12 columns = 48 holes.
+    /// 4 rows x 8 columns = 32 holes.
     /// Player 1: rows 0 (outer), 1 (inner)
     /// Player 2: rows 2 (inner), 3 (outer)
     /// </summary>
     public class GameBoard
     {
+        public const int Rows = 4;
+        public const int Cols = 8;
+        public const int HoleCount = Rows * Cols;
+
         public int[] Board { get; private set; }
-        public int CapturedP1 { get; set; }
-        public int CapturedP2 { get; set; }
         public int CurrentPlayer { get; set; }
 
         private static long[] zobristTable;
@@ -23,8 +25,8 @@ namespace NsoloGame.Core
             if (zobristTable != null)
                 return;
 
-            zobristTable = new long[48 * 49]; // 48 holes, 49 possible stone counts (0-48)
-            
+            zobristTable = new long[HoleCount * (HoleCount + 1)]; // possible stone counts 0..HoleCount
+
             System.Random random = new System.Random(42);
             for (int i = 0; i < zobristTable.Length; i++)
             {
@@ -34,41 +36,33 @@ namespace NsoloGame.Core
 
         /// <summary>
         /// Initialize game board with starting position.
-        /// All holes = 2 EXCEPT B[1][11] = 0 and B[2][0] = 0
+        /// Every pit starts with 2 stones (32 per player).
         /// </summary>
         public GameBoard()
         {
-            Board = new int[48];
-            for (int i = 0; i < 48; i++)
+            Board = new int[HoleCount];
+            for (int i = 0; i < HoleCount; i++)
             {
                 Board[i] = 2;
             }
-            // P1 inner right (r=1, c=11) = 0
-            Board[1 * 12 + 11] = 0;
-            // P2 inner left (r=2, c=0) = 0
-            Board[2 * 12 + 0] = 0;
 
-            CapturedP1 = 0;
-            CapturedP2 = 0;
             CurrentPlayer = 1;
         }
 
         public int Get(int r, int c)
         {
-            return Board[r * 12 + c];
+            return Board[r * Cols + c];
         }
 
         public void Set(int r, int c, int value)
         {
-            Board[r * 12 + c] = value;
+            Board[r * Cols + c] = value;
         }
 
         public GameBoard Clone()
         {
             GameBoard clone = new GameBoard();
-            System.Array.Copy(Board, clone.Board, 48);
-            clone.CapturedP1 = CapturedP1;
-            clone.CapturedP2 = CapturedP2;
+            System.Array.Copy(Board, clone.Board, HoleCount);
             clone.CurrentPlayer = CurrentPlayer;
             return clone;
         }
@@ -79,21 +73,19 @@ namespace NsoloGame.Core
                 InitializeZobrist();
 
             long hash = 0;
-            for (int i = 0; i < 48; i++)
+            for (int i = 0; i < HoleCount; i++)
             {
                 int stoneCount = Board[i];
-                if (stoneCount > 48)
-                    stoneCount = 48;
-                hash ^= zobristTable[i * 49 + stoneCount];
+                if (stoneCount > HoleCount)
+                    stoneCount = HoleCount;
+                hash ^= zobristTable[i * (HoleCount + 1) + stoneCount];
             }
-            hash ^= (long)CapturedP1 << 32;
-            hash ^= CapturedP2;
             return hash;
         }
 
         public override string ToString()
         {
-            return $"GameBoard[CapturedP1={CapturedP1}, CapturedP2={CapturedP2}, CurrentPlayer={CurrentPlayer}]";
+            return $"GameBoard[CurrentPlayer={CurrentPlayer}]";
         }
     }
 }

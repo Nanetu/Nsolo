@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace NsoloGame.Core
 {
@@ -7,6 +8,15 @@ namespace NsoloGame.Core
     /// </summary>
     public class GameEngine
     {
+        private const int MaxSowSegments = 10000;
+
+        /// <summary>
+        /// When true, logs every landing-outcome decision (capture vs relay vs turn-end) to the
+        /// Console. Off by default since the AI's minimax search calls ApplyMoveWithResult many
+        /// thousands of times — only enable while debugging a specific human move.
+        /// </summary>
+        public static bool DebugLandingOutcomes = false;
+
         private SowingPath sowingPath;
 
         public GameEngine(SowingPath sowingPath)
@@ -16,9 +26,9 @@ namespace NsoloGame.Core
 
         /// <summary>
         /// Get all legal moves for a player.
-        /// A legal move is picking up stones from any hole in the player's rows with >= 1 stone.
-        /// Player 1: rows 0, 1
-        /// Player 2: rows 2, 3
+        /// A legal move is picking up stones from any hole in the player's rows with >= 2 stones
+        /// (a pit with exactly one stone cannot be selected).
+        /// Player 1: rows 0, 1. Player 2: rows 2, 3.
         /// </summary>
         public List<Move> GetLegalMoves(GameBoard board, int player)
         {
@@ -27,9 +37,9 @@ namespace NsoloGame.Core
 
             foreach (int r in rows)
             {
-                for (int c = 0; c < 12; c++)
+                for (int c = 0; c < GameBoard.Cols; c++)
                 {
-                    if (board.Get(r, c) >= 1)
+                    if (board.Get(r, c) >= 2)
                     {
                         int pathIndex = sowingPath.GetIndex(player, r, c);
                         moves.Add(new Move(r, c, pathIndex));
@@ -42,7 +52,7 @@ namespace NsoloGame.Core
 
         /// <summary>
         /// Apply a move to the board and return the updated board.
-        /// Handles sowing, relay capture (multi-lap), and capture evaluation.
+        /// Handles sowing, relay sowing, captures, and the capture-restart rule.
         /// </summary>
         public GameBoard ApplyMove(GameBoard board, Move move, int player)
         {
@@ -55,30 +65,100 @@ namespace NsoloGame.Core
             List<(int r, int c)> landingSequence = new List<(int r, int c)>();
             List<SowingSegment> sowingSegments = new List<SowingSegment>();
 
-            // Step 1: Pick up stones
+            int originalIndex = move.PathIndex;
+            int totalCaptured = 0;
+
+            // Step 1: Pick up stones from the selected pit and sow them.
             int r = move.Row;
             int c = move.Col;
             int n = newBoard.Get(r, c);
             newBoard.Set(r, c, 0);
 
-            // Step 2: Sow stones
-            int currentIndex = move.PathIndex;
-            currentIndex = SowSegment(newBoard, player, currentIndex, n, (r, c), landingSequence, sowingSegments);
+            int currentIndex = SowSegment(newBoard, player, originalIndex, n, (r, c), landingSequence, sowingSegments);
 
-            // Step 3: Relay capture (multi-lap sowing)
-            while (newBoard.Get(sowingPath.GetHole(player, currentIndex).r, sowingPath.GetHole(player, currentIndex).c) > 1)
+            // Step 2: Resolve the landing outcome, looping through relays/captures
+            // until a stone lands in a pit that was empty before it was placed.
+            int safety = 0;
+            while (true)
             {
-                var (lastR, lastC) = sowingPath.GetHole(player, currentIndex);
-                int stones = newBoard.Get(lastR, lastC);
-                newBoard.Set(lastR, lastC, 0);
+                if (++safety > MaxSowSegments)
+                {
+                    Debug.LogError("GameEngine: exceeded max sow segments — aborting turn to avoid an infinite loop.");
+                    break;
+                }
 
-                currentIndex = SowSegment(newBoard, player, currentIndex, stones, (lastR, lastC), landingSequence, sowingSegments);
+                var (landR, landC) = sowingPath.GetHole(player, currentIndex);
+                int finalValue = newBoard.Get(landR, landC);
+                bool wasEmptyBeforeFinalStone = finalValue - 1 == 0;
+
+                if (wasEmptyBeforeFinalStone)
+                {
+                    // Rule 1: turn ends immediately. No relay, no capture.
+                    if (DebugLandingOutcomes)
+                        Debug.Log($"[GameEngine] Landed player={player} ({landR},{landC}) finalValue={finalValue} -> TURN END (pit was empty before final stone)");
+                    break;
+                }
+
+                bool isPlayerInnerRow = (player == 1 && landR == 1) || (player == 2 && landR == 2);
+                bool isPlayerOuterRow = (player == 1 && landR == 0) || (player == 2 && landR == 3);
+
+                if (isPlayerInnerRow)
+                {
+                    int opponentInnerRow = player == 1 ? 2 : 1;
+                    int opponentOuterRow = player == 1 ? 3 : 0;
+
+                    int opponentInnerStones = newBoard.Get(opponentInnerRow, landC);
+                    int opponentOuterStones = newBoard.Get(opponentOuterRow, landC);
+
+                    if (DebugLandingOutcomes)
+                        Debug.Log($"[GameEngine] Landed player={player} ({landR},{landC}) finalValue={finalValue} | opponentInner({opponentInnerRow},{landC})={opponentInnerStones} opponentOuter({opponentOuterRow},{landC})={opponentOuterStones} -> {(opponentInnerStones >= 1 && opponentOuterStones >= 1 ? "CAPTURE" : "relay")}");
+
+                    if (opponentInnerStones >= 1 && opponentOuterStones >= 1)
+                    {
+                        // Rule 2 (capture branch): zero out all three pits, then resow the
+                        // gathered stones starting after the ORIGINAL pit picked up this turn
+                        // (not the capture site) — the capture-restart rule. These stones are
+                        // never set aside in a separate "captured" pile; they're simply
+                        // relocated onto the board, which is why a player's score is just
+                        // their live pit total.
+                        int captured = finalValue + opponentInnerStones + opponentOuterStones;
+                        newBoard.Set(landR, landC, 0);
+                        newBoard.Set(opponentInnerRow, landC, 0);
+                        newBoard.Set(opponentOuterRow, landC, 0);
+
+                        totalCaptured += captured;
+
+                        var extraSources = new List<(int r, int c)> { (opponentInnerRow, landC), (opponentOuterRow, landC) };
+                        currentIndex = SowSegment(newBoard, player, originalIndex, captured, (landR, landC), landingSequence, sowingSegments, extraSources);
+                        continue;
+                    }
+                    else
+                    {
+                        // Rule 2 (relay branch): pick up the landing pit and continue.
+                        int stones = finalValue;
+                        newBoard.Set(landR, landC, 0);
+                        currentIndex = SowSegment(newBoard, player, currentIndex, stones, (landR, landC), landingSequence, sowingSegments);
+                        continue;
+                    }
+                }
+                else if (isPlayerOuterRow)
+                {
+                    // Rule 3: relay sowing unconditionally.
+                    if (DebugLandingOutcomes)
+                        Debug.Log($"[GameEngine] Landed player={player} ({landR},{landC}) finalValue={finalValue} -> relay (outer row, unconditional)");
+                    int stones = finalValue;
+                    newBoard.Set(landR, landC, 0);
+                    currentIndex = SowSegment(newBoard, player, currentIndex, stones, (landR, landC), landingSequence, sowingSegments);
+                    continue;
+                }
+                else
+                {
+                    // Should never happen: every hole belongs to either the player's inner or outer row.
+                    break;
+                }
             }
 
-            // Step 4: Evaluate capture
-            int capturedStones = EvaluateCapture(newBoard, currentIndex, player);
-
-            // Step 5: Switch player
+            // Switch player.
             newBoard.CurrentPlayer = player == 1 ? 2 : 1;
 
             return new MoveResult(
@@ -88,7 +168,7 @@ namespace NsoloGame.Core
                 landingSequence,
                 sowingSegments,
                 sowingPath.GetHole(player, currentIndex),
-                capturedStones);
+                totalCaptured);
         }
 
         private int SowSegment(
@@ -98,7 +178,8 @@ namespace NsoloGame.Core
             int stones,
             (int r, int c) source,
             List<(int r, int c)> landingSequence,
-            List<SowingSegment> sowingSegments)
+            List<SowingSegment> sowingSegments,
+            List<(int r, int c)> extraSources = null)
         {
             List<(int r, int c)> segmentLandings = new List<(int r, int c)>();
 
@@ -112,63 +193,14 @@ namespace NsoloGame.Core
                 stones--;
             }
 
-            sowingSegments.Add(new SowingSegment(source, segmentLandings));
+            sowingSegments.Add(new SowingSegment(source, segmentLandings, extraSources));
             return currentIndex;
         }
 
         /// <summary>
-        /// Evaluate and apply captures.
-        /// Capture if:
-        /// - Final hole is in player's inner row (P1: r==1, P2: r==2)
-        /// - Final hole has exactly 1 stone (was empty before sowing)
-        /// 
-        /// Capture: take opponent's stones at same column in their inner row
-        /// Extended: only if the inner row capture above was non-zero, also take
-        /// opponent's outer row stones at same column. If the inner row was already
-        /// empty, no capture occurs at all (prevents "stealing" outer-row stones
-        /// when the inner row has nothing to capture).
-        /// </summary>
-        private int EvaluateCapture(GameBoard board, int lastIndex, int player)
-        {
-            var (finalR, finalC) = sowingPath.GetHole(player, lastIndex);
-            bool isPlayerInnerRow = (player == 1 && finalR == 1) || (player == 2 && finalR == 2);
-            bool isExactlyOne = board.Get(finalR, finalC) == 1;
-
-            if (!isPlayerInnerRow || !isExactlyOne)
-                return 0;
-
-            // Primary capture: opponent's inner row at same column
-            int opponentInnerRow = player == 1 ? 2 : 1;
-            int opponentOuterRow = player == 1 ? 3 : 0;
-
-            int primaryStones = board.Get(opponentInnerRow, finalC);
-
-            if (primaryStones == 0)
-                return 0;
-
-            board.Set(opponentInnerRow, finalC, 0);
-
-            // Extended capture: opponent's outer row at same column, only if inner row had stones to capture
-            int extendedStones = board.Get(opponentOuterRow, finalC);
-            board.Set(opponentOuterRow, finalC, 0);
-
-            int totalCaptured = primaryStones + extendedStones;
-
-            if (player == 1)
-            {
-                board.CapturedP1 += totalCaptured;
-            }
-            else
-            {
-                board.CapturedP2 += totalCaptured;
-            }
-
-            return totalCaptured;
-        }
-
-        /// <summary>
         /// Check if game is terminal.
-        /// Game is over if the current player has no legal moves (all holes empty).
+        /// Game is over if the current player has no legal moves
+        /// (every pit on their side has 0 or 1 stones).
         /// Returns (isOver, winner) where winner is 1 or 2.
         /// </summary>
         public (bool isOver, int winner) IsTerminal(GameBoard board, int player)
@@ -194,7 +226,7 @@ namespace NsoloGame.Core
 
             foreach (int r in rows)
             {
-                for (int c = 0; c < 12; c++)
+                for (int c = 0; c < GameBoard.Cols; c++)
                 {
                     total += board.Get(r, c);
                 }

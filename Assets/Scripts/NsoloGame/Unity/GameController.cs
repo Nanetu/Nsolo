@@ -11,6 +11,7 @@ namespace NsoloGame.Unity
     public enum GameState
     {
         Initialising,
+        PreGameFormation,
         HumanTurn,
         ValidatingMove,
         ApplyingMove,
@@ -18,17 +19,14 @@ namespace NsoloGame.Unity
         GameOver
     }
 
-    /// <summary>
-    /// MonoBehaviour game controller for Nsolo.
-    /// Manages game flow and state transitions.
-    /// Runs AI on a background thread and dispatches results back to main thread.
-    /// </summary>
     public class GameController : MonoBehaviour
     {
         [SerializeField] private UIManager uiManager;
         [SerializeField] private bool autoStartOnSceneLoad = false;
         [SerializeField] private bool enableBreadcrumbLogs = false;
-        
+        [Tooltip("Logs every capture/relay/turn-end decision from GameEngine to the Console. Off by default since AI search calls this thousands of times.")]
+        [SerializeField] private bool debugLandingOutcomes = false;
+
         private GameState gameState;
         private GameBoard gameBoard;
         private GameEngine gameEngine;
@@ -44,22 +42,36 @@ namespace NsoloGame.Unity
         private Move aiMove;
         private bool isPaused;
         private bool systemsInitialized;
+        private float aiThinkStartTime;
+
+        // Undo
+        private Stack<GameBoard> boardHistory = new Stack<GameBoard>();
+
+        // Hint
+        private Task<Move> hintTask;
+        private CancellationTokenSource hintCancellation;
+
+        // Timer
+        private float gameStartTime;
+
+        // Pre-game formation phase
+        private int formationHeld;
+        private int formationHeldFromRow;
+        private int formationHeldFromCol;
+        private System.Random formationRandom = new System.Random();
 
         public event System.Action<int, int, int> GameOver;
         public GameState CurrentState => gameState;
+        public int CurrentDifficulty => (int)aiDifficulty;
 
         private void Awake()
         {
             Log("Awake()");
-
             if (uiManager == null)
             {
                 uiManager = FindObjectOfType<UIManager>();
-                Log(uiManager == null
-                    ? "No UIManager found in scene during Awake()."
-                    : $"Auto-found UIManager: {uiManager.name}.");
+                Log(uiManager == null ? "No UIManager found." : $"Auto-found UIManager: {uiManager.name}.");
             }
-
             InitializeSystems();
         }
 
@@ -67,31 +79,25 @@ namespace NsoloGame.Unity
         {
             Log("Start()");
             InitializeSystems();
-
             if (autoStartOnSceneLoad)
-            {
                 InitializeGame();
-            }
         }
 
         private void InitializeSystems()
         {
-            if (systemsInitialized)
-                return;
+            if (systemsInitialized) return;
 
             GameBoard.InitializeZobrist();
-            
-            // Initialize game systems
             sowingPath = new SowingPath();
             gameEngine = new GameEngine(sowingPath);
-            
-            // Load AI difficulty from PlayerPrefs (default to Medium)
+            GameEngine.DebugLandingOutcomes = debugLandingOutcomes;
+
             int difficultyInt = PlayerPrefs.GetInt("AIDifficulty", 1);
             aiDifficulty = (Difficulty)difficultyInt;
-            
-            var evaluationFunction = new EvaluationFunction(gameEngine);
-            aiAgent = new AIAgent(gameEngine, evaluationFunction, aiDifficulty);
-            Log($"Game systems initialized. AI difficulty={aiDifficulty}.");
+
+            var eval = new EvaluationFunction(gameEngine);
+            aiAgent = new AIAgent(gameEngine, eval, aiDifficulty);
+            Log($"Systems initialised. Difficulty={aiDifficulty}.");
 
             gameState = GameState.Initialising;
             systemsInitialized = true;
@@ -99,7 +105,7 @@ namespace NsoloGame.Unity
 
         public void StartNewGame(int difficultyInt)
         {
-            Log($"StartNewGame(difficultyInt={difficultyInt})");
+            Log($"StartNewGame({difficultyInt})");
             InitializeSystems();
             SetAIDifficulty(difficultyInt);
             InitializeGame();
@@ -109,46 +115,140 @@ namespace NsoloGame.Unity
         {
             Log("InitializeGame()");
             CancelAiThinking();
+            CancelHintSearch();
             StopAllCoroutines();
+            boardHistory.Clear();
             isPaused = false;
             gameBoard = new GameBoard();
-            gameState = GameState.HumanTurn;
+            gameBoard.CurrentPlayer = GetStartingPlayerForDifficulty(aiDifficulty);
+            gameStartTime = Time.time;
+            formationHeld = 0;
 
             if (uiManager == null)
             {
-                Debug.LogError("GameController: Cannot initialize visuals because UIManager is not assigned.");
+                Debug.LogError("GameController: UIManager not assigned.");
                 return;
             }
 
-            Log($"Starting board created. Total pit stones={CountBoardStones(gameBoard)}. Hole_1_11={gameBoard.Get(1, 11)}, Hole_2_0={gameBoard.Get(2, 0)}.");
-            uiManager.UpdateDisplay(gameBoard, gameBoard.CapturedP1, gameBoard.CapturedP2);
-            uiManager.ShowStatus("Your turn");
-            uiManager.ShowMessage("Select one of your highlighted pits", 2.5f);
-            
-            List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
-            Log($"Initial legal moves={legalMoves.Count}.");
-            uiManager.HighlightLegalMoves(legalMoves);
+            GenerateAIFormation();
+
+            gameState = GameState.PreGameFormation;
+            uiManager.UpdateDisplay(gameBoard);
+            uiManager.ShowStatus("Arrange your stones");
+            uiManager.StopTurnTimer();
+            uiManager.SetUndoInteractable(false);
+            uiManager.ClearHighlights();
+        }
+
+        // ── Pre-Game Formation Phase ─────────────────────────────────────────
+
+        /// <summary>
+        /// Randomly redistribute the AI's own 32 stones across its 16 pits, lightly
+        /// biased toward the inner row, so the AI doesn't enter play with the
+        /// passive uniform 2-per-pit shape.
+        /// </summary>
+        private void GenerateAIFormation()
+        {
+            int[] aiRows = aiPlayer == 1 ? new[] { 0, 1 } : new[] { 2, 3 };
+            int innerRow = aiPlayer == 1 ? 1 : 2;
+            int outerRow = aiPlayer == 1 ? 0 : 3;
+            int cols = GameBoard.Cols;
+            int totalStones = cols * aiRows.Length * 2; // 32
+
+            foreach (int r in aiRows)
+                for (int c = 0; c < cols; c++)
+                    gameBoard.Set(r, c, 0);
+
+            for (int i = 0; i < totalStones; i++)
+            {
+                int c = formationRandom.Next(cols);
+                int r = formationRandom.NextDouble() < 0.6 ? innerRow : outerRow;
+                gameBoard.Set(r, c, gameBoard.Get(r, c) + 1);
+            }
+        }
+
+        public void OnFormationPitTouched(int row, int col)
+        {
+            if (gameState != GameState.PreGameFormation) return;
+            if (!IsHumanRow(row)) return;
+
+            if (formationHeld == 0)
+            {
+                int stones = gameBoard.Get(row, col);
+                if (stones <= 0) return;
+
+                gameBoard.Set(row, col, 0);
+                formationHeld = stones;
+                formationHeldFromRow = row;
+                formationHeldFromCol = col;
+            }
+            else
+            {
+                gameBoard.Set(row, col, gameBoard.Get(row, col) + 1);
+                formationHeld--;
+            }
+
+            uiManager.UpdateDisplay(gameBoard);
+        }
+
+        public void ConfirmFormationReady()
+        {
+            if (gameState != GameState.PreGameFormation) return;
+            if (formationHeld != 0)
+            {
+                uiManager.ShowLastMove($"Place your remaining {formationHeld} stones first");
+                return;
+            }
+
+            gameState = gameBoard.CurrentPlayer == humanPlayer ? GameState.HumanTurn : GameState.AiThinking;
+
+            if (gameState == GameState.HumanTurn)
+            {
+                uiManager.ShowStatus("Your turn");
+                uiManager.ShowLastMove("Select one of your highlighted pits");
+                uiManager.StartTurnTimer();
+                List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
+                uiManager.HighlightLegalMoves(legalMoves);
+            }
+            else
+            {
+                uiManager.ShowStatus("Thinking...");
+                uiManager.ClearHighlights();
+                StartAIMove();
+            }
+        }
+
+        private bool IsHumanRow(int row)
+        {
+            return humanPlayer == 1 ? (row == 0 || row == 1) : (row == 2 || row == 3);
+        }
+
+        private int GetStartingPlayerForDifficulty(Difficulty difficulty)
+        {
+            int defaultStarter = humanPlayer;
+            return PlayerPrefs.GetInt($"LastLoser_Diff{(int)difficulty}", defaultStarter);
         }
 
         private void Update()
         {
-            switch (gameState)
-            {
-                case GameState.AiThinking:
-                    HandleAiThinkingState();
-                    break;
-            }
+            if (gameState == GameState.AiThinking)
+                HandleAiThinkingState();
+
+            HandleHintResult();
         }
 
-        /// <summary>
-        /// Called by UIManager when a hole is touched.
-        /// </summary>
         public void OnHoleTouched(int row, int col)
         {
-            Log($"OnHoleTouched(row={row}, col={col}) while state={gameState}.");
+            Log($"OnHoleTouched({row},{col}) state={gameState}");
+            if (isPaused) return;
 
-            if (isPaused || gameState != GameState.HumanTurn)
+            if (gameState == GameState.PreGameFormation)
+            {
+                OnFormationPitTouched(row, col);
                 return;
+            }
+
+            if (gameState != GameState.HumanTurn) return;
 
             gameState = GameState.ValidatingMove;
             ValidateAndApplyMove(row, col);
@@ -156,88 +256,71 @@ namespace NsoloGame.Unity
 
         private void ValidateAndApplyMove(int row, int col)
         {
-            Log($"ValidateAndApplyMove(row={row}, col={col})");
-
-            // Check if move is legal
             List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
-            Move selectedMove = null;
+            Move selected = null;
+            foreach (var m in legalMoves)
+                if (m.Row == row && m.Col == col) { selected = m; break; }
 
-            foreach (var move in legalMoves)
+            if (selected == null)
             {
-                if (move.Row == row && move.Col == col)
-                {
-                    selectedMove = move;
-                    break;
-                }
-            }
-
-            if (selectedMove == null)
-            {
-                Log("Move rejected as illegal.");
-                // Illegal move - flash red and stay in HumanTurn
                 uiManager.FlashIllegalMove(row, col);
                 uiManager.ShowStatus("Your turn");
                 gameState = GameState.HumanTurn;
                 return;
             }
 
-            // Valid move - apply it
-            Log("Move accepted. Entering ApplyingMove.");
             gameState = GameState.ApplyingMove;
-            pendingMove = selectedMove;
+            pendingMove = selected;
             StartCoroutine(ApplyHumanMoveCoroutine());
         }
 
         private IEnumerator ApplyHumanMoveCoroutine()
         {
-            Log($"HandleApplyingMoveState() applying human move row={pendingMove.Row}, col={pendingMove.Col}.");
+            // Save state for undo before applying
+            boardHistory.Push(gameBoard.Clone());
+            uiManager.SetUndoInteractable(true);
+
+            CancelHintSearch();
+            uiManager.StopTurnTimer();
+
             GameBoard startingBoard = gameBoard.Clone();
-            MoveResult moveResult = gameEngine.ApplyMoveWithResult(gameBoard, pendingMove, humanPlayer);
-            Log($"Human move applied. Total pit stones={CountBoardStones(gameBoard)}, captured P1={gameBoard.CapturedP1}, captured P2={gameBoard.CapturedP2}.");
+            MoveResult moveResult = ApplyMoveWithLandingTrace(pendingMove, humanPlayer);
             uiManager.ShowStatus("Sowing");
             yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
             gameBoard = moveResult.Board;
             ShowMoveFeedback(moveResult, "You");
 
-            // Check if game is over
-            (bool isOver, int winner) = gameEngine.IsTerminal(gameBoard, aiPlayer);
-            if (isOver)
-            {
-                FinishGame(winner);
-                yield break;
-            }
+            if (TryEndGameAfterMove(humanPlayer, aiPlayer)) yield break;
 
-            // Transition to AI thinking
             gameState = GameState.AiThinking;
-            uiManager.ShowStatus("AI thinking");
+            uiManager.ShowStatus("Thinking...");
+            uiManager.SetUndoInteractable(false);
             StartAIMove();
         }
 
+        // Minimum time (seconds) the AI appears to "think" before moving, so play doesn't feel instant.
+        private float MinAiThinkSeconds => aiDifficulty switch
+        {
+            Difficulty.Easy => 1.6f,
+            Difficulty.Medium => 1.2f,
+            _ => 0.8f,
+        };
+
         private void StartAIMove()
         {
-            Log("StartAIMove()");
             CancelAiThinking();
-
-            // Run AI on background thread
-            GameBoard aiBoardSnapshot = gameBoard.Clone();
+            GameBoard snapshot = gameBoard.Clone();
             aiMoveCancellation = new CancellationTokenSource();
             CancellationToken token = aiMoveCancellation.Token;
-            aiMoveTask = Task.Run(() => aiAgent.SelectMove(aiBoardSnapshot, aiPlayer, token), token);
+            aiThinkStartTime = Time.time;
+            aiMoveTask = Task.Run(() => aiAgent.SelectMove(snapshot, aiPlayer, token), token);
         }
 
         private void HandleAiThinkingState()
         {
-            if (isPaused)
-                return;
-
-            if (aiMoveTask == null || !aiMoveTask.IsCompleted)
-                return;
-
-            if (aiMoveTask.IsCanceled || aiMoveTask.IsFaulted)
-            {
-                aiMoveTask = null;
-                return;
-            }
+            if (isPaused || aiMoveTask == null || !aiMoveTask.IsCompleted) return;
+            if (Time.time - aiThinkStartTime < MinAiThinkSeconds) return;
+            if (aiMoveTask.IsCanceled || aiMoveTask.IsFaulted) { aiMoveTask = null; return; }
 
             aiMove = aiMoveTask.Result;
             aiMoveTask = null;
@@ -250,36 +333,83 @@ namespace NsoloGame.Unity
             }
             else
             {
-                Debug.LogWarning("GameController: AI returned no move. Ending game in favour of the human player.");
+                Debug.LogWarning("GameController: AI returned no move. Human wins.");
                 FinishGame(humanPlayer);
             }
         }
 
         private IEnumerator ApplyAiMoveCoroutine(Move move)
         {
-            Log($"AI move selected row={move.Row}, col={move.Col}.");
             GameBoard startingBoard = gameBoard.Clone();
-            MoveResult moveResult = gameEngine.ApplyMoveWithResult(gameBoard, move, aiPlayer);
-            Log($"AI move applied. Total pit stones={CountBoardStones(moveResult.Board)}, captured P1={moveResult.Board.CapturedP1}, captured P2={moveResult.Board.CapturedP2}.");
+            MoveResult moveResult = ApplyMoveWithLandingTrace(move, aiPlayer);
             uiManager.ShowStatus("AI sowing");
             yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
             gameBoard = moveResult.Board;
             ShowMoveFeedback(moveResult, "AI");
 
-            // Check if game is over
-            (bool isOver, int winner) = gameEngine.IsTerminal(gameBoard, humanPlayer);
-            if (isOver)
-            {
-                FinishGame(winner);
-                yield break;
-            }
+            if (TryEndGameAfterMove(aiPlayer, humanPlayer)) yield break;
 
             gameState = GameState.HumanTurn;
             uiManager.ShowStatus("Your turn");
+            uiManager.StartTurnTimer();
             List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
-            Log($"Returned to HumanTurn. Legal moves={legalMoves.Count}.");
             uiManager.HighlightLegalMoves(legalMoves);
         }
+
+        // ── Undo ─────────────────────────────────────────────────────────
+
+        public void UndoLastMove()
+        {
+            if (gameState != GameState.HumanTurn || boardHistory.Count == 0) return;
+
+            CancelHintSearch();
+            gameBoard = boardHistory.Pop();
+            uiManager.SetUndoInteractable(boardHistory.Count > 0);
+
+            uiManager.UpdateDisplay(gameBoard);
+            uiManager.ShowStatus("Your turn");
+            uiManager.ShowLastMove("Move undone");
+            uiManager.StartTurnTimer();
+
+            List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
+            uiManager.HighlightLegalMoves(legalMoves);
+        }
+
+        // ── Hint ─────────────────────────────────────────────────────────
+
+        public void RequestHint()
+        {
+            if (gameState != GameState.HumanTurn || gameBoard == null) return;
+
+            CancelHintSearch();
+            GameBoard snapshot = gameBoard.Clone();
+            hintCancellation = new CancellationTokenSource();
+            CancellationToken token = hintCancellation.Token;
+            hintTask = Task.Run(() => aiAgent.GetHintMove(snapshot, humanPlayer, token), token);
+        }
+
+        private void HandleHintResult()
+        {
+            if (hintTask == null || !hintTask.IsCompleted) return;
+            if (hintTask.IsCanceled || hintTask.IsFaulted) { hintTask = null; return; }
+
+            Move hint = hintTask.Result;
+            hintTask = null;
+            hintCancellation = null;
+
+            if (hint != null && gameState == GameState.HumanTurn)
+                uiManager.FlashHintPit(hint.Row, hint.Col);
+        }
+
+        private void CancelHintSearch()
+        {
+            hintCancellation?.Cancel();
+            hintCancellation?.Dispose();
+            hintCancellation = null;
+            hintTask = null;
+        }
+
+        // ── Pause / Restart ───────────────────────────────────────────────
 
         public void RestartGame()
         {
@@ -291,22 +421,17 @@ namespace NsoloGame.Unity
 
         public void SetPaused(bool paused)
         {
-            Log($"SetPaused({paused}) while state={gameState}.");
+            Log($"SetPaused({paused})");
             isPaused = paused;
 
             if (paused)
             {
-                if (gameState == GameState.AiThinking)
-                {
-                    CancelAiThinking();
-                }
+                CancelAiThinking();
                 return;
             }
 
             if (gameState == GameState.AiThinking && aiMoveTask == null)
-            {
                 StartAIMove();
-            }
         }
 
         public void SetAIDifficulty(int difficultyInt)
@@ -315,74 +440,101 @@ namespace NsoloGame.Unity
             aiDifficulty = (Difficulty)difficultyInt;
             PlayerPrefs.SetInt("AIDifficulty", difficultyInt);
             PlayerPrefs.Save();
-            
-            var evaluationFunction = new EvaluationFunction(gameEngine);
-            aiAgent = new AIAgent(gameEngine, evaluationFunction, aiDifficulty);
+            var eval = new EvaluationFunction(gameEngine);
+            aiAgent = new AIAgent(gameEngine, eval, aiDifficulty);
         }
+
+        // ── Internal ──────────────────────────────────────────────────────
 
         private void ShowMoveFeedback(MoveResult moveResult, string actor)
         {
-            string movedFrom = $"{actor} moved from row {moveResult.Move.Row}, column {moveResult.Move.Col}";
-            if (moveResult.CapturedStones > 0)
+            string info = moveResult.CapturedStones > 0
+                ? $"{actor}: Hole {moveResult.Move.Col + 1} → Captured {moveResult.CapturedStones}"
+                : $"{actor}: Hole {moveResult.Move.Col + 1}";
+            uiManager.ShowLastMove(info);
+        }
+
+        /// <summary>
+        /// Applies a real, on-board move with GameEngine's landing-outcome logging turned on
+        /// just for this call, so the Console always has a clean capture/relay/turn-end trace
+        /// for actual moves — without enabling it for the AI's internal minimax search, which
+        /// would otherwise call ApplyMoveWithResult thousands of times per "Thinking..." pause.
+        /// </summary>
+        private MoveResult ApplyMoveWithLandingTrace(Move move, int player)
+        {
+            bool previous = GameEngine.DebugLandingOutcomes;
+            GameEngine.DebugLandingOutcomes = true;
+            try
             {
-                uiManager.ShowMessage($"{movedFrom}. Captured {moveResult.CapturedStones} stones.");
+                return gameEngine.ApplyMoveWithResult(gameBoard, move, player);
             }
-            else
+            finally
             {
-                uiManager.ShowMessage(movedFrom + ".");
+                GameEngine.DebugLandingOutcomes = previous;
             }
+        }
+
+        /// <summary>
+        /// Checks for game-over immediately after a move resolves, without waiting for the
+        /// opponent to take a (possibly pointless) turn first. Each player only ever sows
+        /// within their own two rows, and the opponent can only ever zero out their pits via
+        /// capture — never add stones — so once the player who just moved is left with no
+        /// legal moves of their own, that outcome is already final and doesn't need the
+        /// opponent to play it out to confirm.
+        /// </summary>
+        private bool TryEndGameAfterMove(int moverPlayer, int opponentPlayer)
+        {
+            if (gameEngine.GetLegalMoves(gameBoard, opponentPlayer).Count == 0)
+            {
+                FinishGame(moverPlayer);
+                return true;
+            }
+
+            if (gameEngine.GetLegalMoves(gameBoard, moverPlayer).Count == 0)
+            {
+                FinishGame(opponentPlayer);
+                return true;
+            }
+
+            return false;
         }
 
         private void FinishGame(int winner)
         {
             Log($"FinishGame(winner={winner})");
             CancelAiThinking();
+            CancelHintSearch();
             gameState = GameState.GameOver;
 
-            int capturedP1 = gameBoard == null ? 0 : gameBoard.CapturedP1;
-            int capturedP2 = gameBoard == null ? 0 : gameBoard.CapturedP2;
+            // Score is just each player's live pit total — there's no separate captured pile.
+            int p1Stones = gameBoard != null ? gameEngine.GetPlayerStones(gameBoard, 1) : 0;
+            int p2Stones = gameBoard != null ? gameEngine.GetPlayerStones(gameBoard, 2) : 0;
 
-            if (uiManager != null)
-            {
-                uiManager.ShowGameOver(winner);
-            }
+            float elapsed = Time.time - gameStartTime;
+            bool humanWon = winner == humanPlayer;
+            ProfileManager.Instance?.RecordGameResult((int)aiDifficulty, humanWon, elapsed);
 
-            GameOver?.Invoke(winner, capturedP1, capturedP2);
+            int loser = winner == humanPlayer ? aiPlayer : humanPlayer;
+            PlayerPrefs.SetInt($"LastLoser_Diff{(int)aiDifficulty}", loser);
+            PlayerPrefs.Save();
+
+            uiManager?.ShowGameOver(winner);
+            GameOver?.Invoke(winner, p1Stones, p2Stones);
         }
 
         private void CancelAiThinking()
         {
-            if (aiMoveCancellation != null)
-            {
-                aiMoveCancellation.Cancel();
-                aiMoveCancellation.Dispose();
-                aiMoveCancellation = null;
-            }
-
+            aiMoveCancellation?.Cancel();
+            aiMoveCancellation?.Dispose();
+            aiMoveCancellation = null;
             aiMoveTask = null;
             aiMove = null;
         }
 
-        private int CountBoardStones(GameBoard board)
-        {
-            int total = 0;
-            for (int r = 0; r < 4; r++)
-            {
-                for (int c = 0; c < 12; c++)
-                {
-                    total += board.Get(r, c);
-                }
-            }
-
-            return total;
-        }
-
-        private void Log(string message)
+        private void Log(string msg)
         {
             if (enableBreadcrumbLogs)
-            {
-                Debug.Log($"[GameController] {message}", this);
-            }
+                Debug.Log($"[GameController] {msg}", this);
         }
     }
 }

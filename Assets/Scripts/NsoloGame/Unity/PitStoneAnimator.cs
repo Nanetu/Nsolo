@@ -65,17 +65,23 @@ namespace NsoloGame.Unity
             if (startingBoard == null || moveResult == null)
                 yield break;
 
-            visualizer.Refresh(startingBoard, startingBoard.CapturedP1, startingBoard.CapturedP2);
+            visualizer.Refresh(startingBoard);
 
             foreach (SowingSegment segment in moveResult.SowingSegments)
                 yield return AnimateSowingSegment(segment);
 
-            visualizer.Refresh(moveResult.Board, moveResult.Board.CapturedP1, moveResult.Board.CapturedP2);
+            visualizer.Refresh(moveResult.Board);
         }
 
         private IEnumerator AnimateSowingSegment(SowingSegment segment)
         {
+            // Most segments pick up from a single pit. Captures pick up from the landing pit
+            // plus both of the opponent's same-column pits — gather all of them into one group
+            // so every captured stone actually has a GameObject to fly into the resow.
             List<GameObject> pickedStones = PickUpStones(segment.Source.r, segment.Source.c);
+            foreach (var extraSource in segment.ExtraSources)
+                pickedStones.AddRange(PickUpStones(extraSource.r, extraSource.c));
+
             if (pickedStones.Count == 0)
                 yield break;
 
@@ -170,6 +176,7 @@ namespace NsoloGame.Unity
             if (layout.UseCenteredStonePiles)
             {
                 Vector3 basePosition = layout.GetPitBasePosition(pit);
+                int totalAfterLanding = existingStonesInDestination.Count + 1;
 
                 for (int j = 0; j < existingStonesInDestination.Count; j++)
                 {
@@ -178,14 +185,14 @@ namespace NsoloGame.Unity
                         continue;
 
                     System.Random existingRandom = new System.Random(layout.RandomSeed + row * 97 + col * 13 + j * 23);
-                    Vector3 newSlot = layout.GetPileStonePosition(basePosition, pit.right, pit.forward, layout.CenteredPitRadius, layout.CenteredPitRadius, j, existingRandom, layout.PitBottomLayerStoneCount);
+                    Vector3 newSlot = layout.GetPileStonePosition(basePosition, pit.right, pit.forward, layout.CenteredPitRadius, layout.CenteredPitRadius, j, totalAfterLanding, existingRandom, layout.PitBottomLayerStoneCount);
 
                     if ((existing.transform.position - newSlot).sqrMagnitude > 0.0001f)
                         mono.StartCoroutine(MoveStone(existing.transform, existing.transform.position, newSlot, secondsPerStone * 0.6f, 0f));
                 }
 
                 System.Random incomingRandom = new System.Random(layout.RandomSeed + row * 97 + col * 13 + existingStonesInDestination.Count * 23);
-                return layout.GetPileStonePosition(basePosition, pit.right, pit.forward, layout.CenteredPitRadius, layout.CenteredPitRadius, existingStonesInDestination.Count, incomingRandom, layout.PitBottomLayerStoneCount);
+                return layout.GetPileStonePosition(basePosition, pit.right, pit.forward, layout.CenteredPitRadius, layout.CenteredPitRadius, existingStonesInDestination.Count, totalAfterLanding, incomingRandom, layout.PitBottomLayerStoneCount);
             }
 
             return layout.GetPitStonePositionWithSeparationAndBounds(row, col, existingStonesInDestination, incomingStone, pit);
