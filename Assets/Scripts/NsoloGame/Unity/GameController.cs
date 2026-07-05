@@ -276,9 +276,9 @@ namespace NsoloGame.Unity
 
         private IEnumerator ApplyHumanMoveCoroutine()
         {
-            // Save state for undo before applying
+            // Save state for undo before applying. The button is re-enabled once the human's
+            // turn actually resumes (after the AI replies), not during this animation.
             boardHistory.Push(gameBoard.Clone());
-            uiManager.SetUndoInteractable(true);
 
             CancelHintSearch();
             uiManager.StopTurnTimer();
@@ -352,6 +352,9 @@ namespace NsoloGame.Unity
             gameState = GameState.HumanTurn;
             uiManager.ShowStatus("Your turn");
             uiManager.StartTurnTimer();
+            // Undo is only allowed during the human's turn, so (re)enable it here rather than
+            // during the move animation. This reverts the human's last move and the AI's reply.
+            uiManager.SetUndoInteractable(boardHistory.Count > 0);
             List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
             uiManager.HighlightLegalMoves(legalMoves);
         }
@@ -382,6 +385,7 @@ namespace NsoloGame.Unity
             if (gameState != GameState.HumanTurn || gameBoard == null) return;
 
             CancelHintSearch();
+            uiManager.ShowLastMove("Finding a hint...");
             GameBoard snapshot = gameBoard.Clone();
             hintCancellation = new CancellationTokenSource();
             CancellationToken token = hintCancellation.Token;
@@ -398,7 +402,14 @@ namespace NsoloGame.Unity
             hintCancellation = null;
 
             if (hint != null && gameState == GameState.HumanTurn)
+            {
+                uiManager.ShowLastMove($"Hint: play Hole {hint.Col + 1}");
                 uiManager.FlashHintPit(hint.Row, hint.Col);
+            }
+            else if (gameState == GameState.HumanTurn)
+            {
+                uiManager.ShowLastMove("No hint available");
+            }
         }
 
         private void CancelHintSearch()
@@ -455,23 +466,15 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
-        /// Applies a real, on-board move with GameEngine's landing-outcome logging turned on
-        /// just for this call, so the Console always has a clean capture/relay/turn-end trace
-        /// for actual moves — without enabling it for the AI's internal minimax search, which
-        /// would otherwise call ApplyMoveWithResult thousands of times per "Thinking..." pause.
+        /// Applies a real, on-board move. Landing-outcome console logging is governed solely by the
+        /// serialized <see cref="debugLandingOutcomes"/> toggle (applied once in InitializeSystems),
+        /// so it stays off by default. The old per-move force-enable here was a bug: GameEngine's
+        /// flag is static and the hint/AI searches run on background threads, so forcing it true
+        /// bled into their thousands of ApplyMoveWithResult calls and flooded the Console.
         /// </summary>
         private MoveResult ApplyMoveWithLandingTrace(Move move, int player)
         {
-            bool previous = GameEngine.DebugLandingOutcomes;
-            GameEngine.DebugLandingOutcomes = true;
-            try
-            {
-                return gameEngine.ApplyMoveWithResult(gameBoard, move, player);
-            }
-            finally
-            {
-                GameEngine.DebugLandingOutcomes = previous;
-            }
+            return gameEngine.ApplyMoveWithResult(gameBoard, move, player);
         }
 
         /// <summary>
