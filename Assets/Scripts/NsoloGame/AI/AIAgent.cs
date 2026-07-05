@@ -88,34 +88,51 @@ namespace NsoloGame.AI
                 }
             }
 
+            return SearchBestMove(board, aiPlayer, maxDepth, timeBudgetMs, cancellationToken);
+        }
+
+        /// <summary>
+        /// Iterative-deepening alpha-beta search shared by the AI's move selection and the hint
+        /// system. Searches depth 1, 2, 3… keeping the best move from the last <em>fully completed</em>
+        /// depth, and bails out as soon as <paramref name="budgetMs"/> or cancellation is hit — so it
+        /// always has a usable move ready and stays responsive. Deterministic (no randomness).
+        /// </summary>
+        private Core.Move SearchBestMove(Core.GameBoard board, int player, int depthCap, long budgetMs, CancellationToken cancellationToken)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                return null;
+
             Stopwatch timer = Stopwatch.StartNew();
             transpositionTable.Clear();
             moveHistoryScores.Clear();
 
-            Core.Move bestMove = null;
-            List<Core.Move> legalMoves2 = gameEngine.GetLegalMoves(board, aiPlayer);
-
-            if (legalMoves2.Count == 0)
+            List<Core.Move> legalMoves = gameEngine.GetLegalMoves(board, player);
+            if (legalMoves.Count == 0)
                 return null;
 
-            // Iterative deepening
-            for (int depth = 1; depth <= maxDepth; depth++)
+            Core.Move bestMove = null;
+
+            for (int depth = 1; depth <= depthCap; depth++)
             {
-                if (cancellationToken.IsCancellationRequested || timer.ElapsedMilliseconds > timeBudgetMs)
+                if (cancellationToken.IsCancellationRequested || timer.ElapsedMilliseconds > budgetMs)
                     break;
 
                 float bestScore = float.MinValue;
                 Core.Move candidateMove = null;
-                List<Core.Move> orderedRootMoves = OrderMoves(board, legalMoves2, aiPlayer, bestMove);
+                bool depthCompleted = true;
+                List<Core.Move> orderedRootMoves = OrderMoves(board, legalMoves, player, bestMove);
 
                 foreach (var move in orderedRootMoves)
                 {
-                    if (cancellationToken.IsCancellationRequested || timer.ElapsedMilliseconds > timeBudgetMs)
+                    if (cancellationToken.IsCancellationRequested || timer.ElapsedMilliseconds > budgetMs)
+                    {
+                        depthCompleted = false;
                         break;
+                    }
 
-                    Core.MoveResult moveResult = gameEngine.ApplyMoveWithResult(board, move, aiPlayer);
-                    RecordMoveOrderingSignal(move, aiPlayer, moveResult, depth);
-                    float score = Minimax(moveResult.Board, depth - 1, float.MinValue, float.MaxValue, false, aiPlayer, timer.ElapsedTicks, cancellationToken);
+                    Core.MoveResult moveResult = gameEngine.ApplyMoveWithResult(board, move, player);
+                    RecordMoveOrderingSignal(move, player, moveResult, depth);
+                    float score = Minimax(moveResult.Board, depth - 1, float.MinValue, float.MaxValue, false, player, timer.ElapsedTicks, cancellationToken);
 
                     if (score > bestScore)
                     {
@@ -124,16 +141,17 @@ namespace NsoloGame.AI
                     }
                 }
 
-                if (candidateMove != null)
-                {
+                // Only trust a depth's result if it finished; a time-interrupted depth may have
+                // only looked at a few root moves. The exception is the very first depth, where a
+                // partial answer still beats returning nothing.
+                if (candidateMove != null && (depthCompleted || bestMove == null))
                     bestMove = candidateMove;
-                }
             }
 
             if (cancellationToken.IsCancellationRequested)
                 return null;
 
-            return bestMove ?? legalMoves2[0];
+            return bestMove ?? legalMoves[0];
         }
 
         /// <summary>
@@ -309,31 +327,21 @@ namespace NsoloGame.AI
             return player * 1000 + move.Row * 8 + move.Col;
         }
 
+        // Hint search tuning. The hint should be a strong move but arrive quickly, so it uses the
+        // same iterative-deepening search as the AI with a high depth cap but a short time budget —
+        // the budget, not the depth, is what actually bounds how long the player waits.
+        private const int HintDepthCap = 6;
+        private const long HintTimeBudgetMs = 700;
+
         /// <summary>
-        /// Deterministic depth-2 search for the hint system. Never picks randomly.
-        /// Evaluates from <paramref name="player"/>'s perspective so it works for both sides.
+        /// Best-move suggestion for the hint system. Runs the same deterministic iterative-deepening
+        /// alpha-beta search the AI uses, from <paramref name="player"/>'s perspective, but capped by
+        /// a short time budget so it returns a good move promptly and cancels instantly. Independent
+        /// of the current difficulty, so hints are always strong even on Easy.
         /// </summary>
         public Core.Move GetHintMove(Core.GameBoard board, int player, CancellationToken ct)
         {
-            List<Core.Move> legal = gameEngine.GetLegalMoves(board, player);
-            if (legal.Count == 0) return null;
-
-            float bestScore = float.MinValue;
-            Core.Move bestMove = null;
-
-            foreach (var move in legal)
-            {
-                if (ct.IsCancellationRequested) break;
-                Core.MoveResult result = gameEngine.ApplyMoveWithResult(board, move, player);
-                float score = Minimax(result.Board, 2, float.MinValue, float.MaxValue, false, player, 0, ct);
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    bestMove = move;
-                }
-            }
-
-            return bestMove ?? legal[0];
+            return SearchBestMove(board, player, HintDepthCap, HintTimeBudgetMs, ct);
         }
 
         private bool IsSameMove(Core.Move left, Core.Move right)

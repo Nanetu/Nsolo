@@ -82,10 +82,18 @@ namespace NsoloGame.Unity
             foreach (var extraSource in segment.ExtraSources)
                 pickedStones.AddRange(PickUpStones(extraSource.r, extraSource.c));
 
+            Vector3 sourcePosition = visualizer.GetPitPosition(segment.Source.r, segment.Source.c);
+
+            // Pit piles are visually capped (maxVisualStonesPerPit), so a big pit can hold
+            // fewer stone GameObjects than the engine actually sowed from it. Without topping
+            // up, the trailing landings of this segment would get no stone: pits that really
+            // hold a stone would look empty, and the next relay pickup would appear to jump
+            // to an unrelated pit. Spawn extras at the source so every landing is animated.
+            while (pickedStones.Count < segment.Landings.Count)
+                pickedStones.Add(visualizer.SpawnStoneForAnimation(sourcePosition));
+
             if (pickedStones.Count == 0)
                 yield break;
-
-            Vector3 sourcePosition = visualizer.GetPitPosition(segment.Source.r, segment.Source.c);
             Vector3 hoverCenter = sourcePosition + Vector3.up * pickupLiftHeight;
 
             for (int i = 0; i < pickedStones.Count; i++)

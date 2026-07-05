@@ -101,11 +101,11 @@ namespace NsoloGame.Unity
 
         /// <summary>
         /// Places stone <paramref name="index"/> in an explicit layer stack.
-        /// The bottom layer holds up to <paramref name="bottomLayerCount"/> stones (default 4) in a
-        /// deterministic formation keyed off how many stones actually occupy that layer: 1 = a single
-        /// centered spot, 2 = a line, 3 = a triangle, 4 = a square. Anything beyond the bottom layer
-        /// stacks centered directly on top as a placeholder column — a dedicated "too many stones to
-        /// show individually" representation is a separate follow-up.
+        /// Every layer holds up to <paramref name="bottomLayerCount"/> stones (default 4) in the same
+        /// deterministic formation, keyed off how many stones actually occupy that layer: 1 = a single
+        /// centered spot, 2 = a line, 3 = a triangle, 4 = a square. So a filling pit repeats the bottom
+        /// layer's spot→line→triangle→square growth on each successive layer stacked on top, rather than
+        /// piling later stones into a single centered column.
         /// </summary>
         public Vector3 GetPileStonePosition(Vector3 basePosition, Vector3 right, Vector3 forward, float radiusX, float radiusZ, int index, int totalStones, System.Random random, int bottomLayerCount)
         {
@@ -117,22 +117,10 @@ namespace NsoloGame.Unity
             int layer = index / bottomLayerCount;
             int indexInLayer = index % bottomLayerCount;
 
-            Vector2 offset;
-            float overflowStack = 0f;
-
-            if (layer == 0)
-            {
-                // The bottom layer's true occupancy (1-4 stones), not an assumed-full layer —
-                // this is what makes 1/2/3/4 stones render as spot/line/triangle/square.
-                int bottomLayerSize = Mathf.Clamp(totalStones, 1, bottomLayerCount);
-                offset = GetLayerFormationOffset(indexInLayer, bottomLayerSize, radiusX, radiusZ);
-            }
-            else
-            {
-                // Overflow beyond the bottom layer: stack centered on top of the pile.
-                offset = Vector2.zero;
-                overflowStack = indexInLayer * diameter * 0.55f;
-            }
+            // How many stones actually occupy this specific layer (1-bottomLayerCount). The top,
+            // partially filled layer grows spot→line→triangle→square just like the bottom one.
+            int stonesInThisLayer = Mathf.Clamp(totalStones - layer * bottomLayerCount, 1, bottomLayerCount);
+            Vector2 offset = GetLayerFormationOffset(indexInLayer, stonesInThisLayer, radiusX, radiusZ);
 
             float jx = (float)(random.NextDouble() - 0.5) * diameter * 0.08f;
             float jz = (float)(random.NextDouble() - 0.5) * diameter * 0.08f;
@@ -141,7 +129,7 @@ namespace NsoloGame.Unity
             return basePosition
                 + right * (offset.x + jx)
                 + forward * (offset.y + jz)
-                + Vector3.up * (layer * layerStep + overflowStack + jy);
+                + Vector3.up * (layer * layerStep + jy);
         }
 
         /// <summary>

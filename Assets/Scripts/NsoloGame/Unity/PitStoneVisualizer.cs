@@ -248,6 +248,22 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
+        /// Spawns a single loose stone for the animator. Pit piles are visually capped at
+        /// maxVisualStonesPerPit, so a large pit can hold fewer stone GameObjects than the
+        /// engine actually sowed — the animator tops up with these so every landing in a
+        /// sowing segment gets a visible stone. The stone is tracked in spawnedStones (so
+        /// Refresh/Clear still owns its lifetime) but belongs to no pit until it lands.
+        /// </summary>
+        internal GameObject SpawnStoneForAnimation(Vector3 position)
+        {
+            GameObject stone = Instantiate(stonePrefab, position, Quaternion.identity, spawnedStoneRoot);
+            stone.transform.localScale = stone.transform.localScale * stoneScale;
+            DisableColliders(stone);
+            spawnedStones.Add(stone);
+            return stone;
+        }
+
+        /// <summary>
         /// Spawned stones must never intercept the board's pit-click raycasts — a stone sitting
         /// on top of a pit can otherwise occlude the raycast to pits further from the camera
         /// (e.g. the inner row sitting behind the outer row's stones).
