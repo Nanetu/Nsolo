@@ -38,9 +38,6 @@ namespace NsoloGame.Unity
         [SerializeField] private Color legalMoveColor = new Color(1f, 0.85f, 0.05f);
         [SerializeField] private Color illegalMoveColor = Color.red;
 
-        [Header("Settings")]
-        [SerializeField] private float transientMessageSeconds = 3f;
-
         [Header("Debug")]
         [SerializeField] private bool enableBreadcrumbLogs = false;
 
@@ -49,11 +46,14 @@ namespace NsoloGame.Unity
         private bool hasReceivedBoardState;
         private Camera inputCamera;
         private int lastHandledInputFrame = -1;
-        private Coroutine lastMoveCoroutine;
 
-        // Timer
+        // Timer. This is a single game clock, not a per-turn one. StartTurnTimer is idempotent, so
+        // the repeated calls as turns hand off leave it running; it only stops at game over. Pause
+        // needs no special handling because Time.time is scaled and freezes with timeScale 0.
         private bool timerRunning;
-        private float timerStartTime;
+        private float timerResumedAt;
+        private float timerAccumulated;
+        private string timerDisplayed;
 
         private void Awake()
         {
@@ -139,28 +139,33 @@ namespace NsoloGame.Unity
             UpdateScores(board);
         }
 
+        /// <summary>
+        /// Shows the caller's text verbatim (in caps). This used to guess the status by sniffing
+        /// the message for substrings, which turned "Arrange your stones" into "YOUR TURN" — the
+        /// caller already knows the state, so it just says what it means.
+        /// </summary>
         public void ShowStatus(string message)
         {
             if (turnStatusText == null) return;
-            string lower = message.ToLowerInvariant();
-            if (lower.Contains("your") || lower.Contains("human"))
-                turnStatusText.text = "YOUR TURN";
-            else if (lower.Contains("think") || lower.Contains("ai"))
-                turnStatusText.text = "THINKING...";
-            else if (lower.Contains("sow"))
-                turnStatusText.text = "SOWING...";
-            else
-                turnStatusText.text = message.ToUpperInvariant();
+            turnStatusText.text = message.ToUpperInvariant();
         }
 
+        /// <summary>
+        /// Sets the last-move line. The text stays on screen until something replaces it, so the
+        /// player can still read what happened well after the move that caused it.
+        /// </summary>
         public void ShowLastMove(string message)
         {
             if (lastMoveText == null) return;
-
-            if (lastMoveCoroutine != null) StopCoroutine(lastMoveCoroutine);
             lastMoveText.text = message;
             lastMoveText.enabled = true;
-            lastMoveCoroutine = StartCoroutine(ClearLastMoveAfterDelay(transientMessageSeconds));
+        }
+
+        /// <summary>Blanks the last-move line, e.g. when a new game starts.</summary>
+        public void ClearLastMove()
+        {
+            if (lastMoveText == null) return;
+            lastMoveText.text = string.Empty;
         }
 
         // Keep ShowMessage as an alias so GameController's existing call compiles
@@ -216,25 +221,46 @@ namespace NsoloGame.Unity
 
         // ── Timer ─────────────────────────────────────────────────────────
 
+        /// <summary>Zeroes the game clock. Call once when a new game begins.</summary>
+        public void ResetGameTimer()
+        {
+            timerRunning = false;
+            timerAccumulated = 0f;
+            RenderTimer(0f);
+        }
+
         public void StartTurnTimer()
         {
+            if (timerRunning) return;
+            timerResumedAt = Time.time;
             timerRunning = true;
-            timerStartTime = Time.time;
         }
 
         public void StopTurnTimer()
         {
+            if (!timerRunning) return;
+            timerAccumulated += Time.time - timerResumedAt;
             timerRunning = false;
+            RenderTimer(timerAccumulated);
         }
+
+        private float ElapsedSeconds =>
+            timerAccumulated + (timerRunning ? Time.time - timerResumedAt : 0f);
 
         private void UpdateTimerDisplay()
         {
+            if (timerRunning) RenderTimer(ElapsedSeconds);
+        }
+
+        private void RenderTimer(float seconds)
+        {
             if (timerText == null) return;
-            if (!timerRunning) return;
-            float elapsed = Time.time - timerStartTime;
-            int m = (int)(elapsed / 60);
-            int s = (int)(elapsed % 60);
-            timerText.text = $"{m:00}:{s:00}";
+            string formatted = $"{(int)(seconds / 60):00}:{(int)(seconds % 60):00}";
+            // Only touch the label when the visible value changes — assigning every frame
+            // forces a TMP mesh rebuild, which is wasted work on a clock that ticks once a second.
+            if (formatted == timerDisplayed) return;
+            timerDisplayed = formatted;
+            timerText.text = formatted;
         }
 
         // ── Helpers ───────────────────────────────────────────────────────
@@ -263,13 +289,6 @@ namespace NsoloGame.Unity
             SetHoleColor(row, col, color);
             yield return new WaitForSeconds(duration);
             ClearHoleColor(row, col);
-        }
-
-        private IEnumerator ClearLastMoveAfterDelay(float seconds)
-        {
-            yield return new WaitForSeconds(seconds);
-            if (lastMoveText != null) lastMoveText.enabled = false;
-            lastMoveCoroutine = null;
         }
 
         private IEnumerator SpawnStartingBoardFallbackNextFrame()

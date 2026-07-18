@@ -64,6 +64,12 @@ namespace NsoloGame.Unity
         public GameState CurrentState => gameState;
         public int CurrentDifficulty => (int)aiDifficulty;
 
+        /// <summary>
+        /// Wall-clock length of the game that just finished. Captured once in FinishGame so the
+        /// game-over panel keeps showing the final time instead of a clock that keeps ticking.
+        /// </summary>
+        public float LastGameSeconds { get; private set; }
+
         private void Awake()
         {
             Log("Awake()");
@@ -134,8 +140,9 @@ namespace NsoloGame.Unity
 
             gameState = GameState.PreGameFormation;
             uiManager.UpdateDisplay(gameBoard);
-            uiManager.ShowStatus("Arrange your stones");
-            uiManager.StopTurnTimer();
+            uiManager.ShowStatus("Arrange");
+            uiManager.ResetGameTimer();
+            uiManager.ClearLastMove();
             uiManager.SetUndoInteractable(false);
             uiManager.ClearHighlights();
         }
@@ -202,11 +209,14 @@ namespace NsoloGame.Unity
 
             gameState = gameBoard.CurrentPlayer == humanPlayer ? GameState.HumanTurn : GameState.AiThinking;
 
+            // The clock starts the moment the player commits their formation, whichever side moves
+            // first — arranging stones shouldn't count against the game time.
+            uiManager.StartTurnTimer();
+
             if (gameState == GameState.HumanTurn)
             {
                 uiManager.ShowStatus("Your turn");
                 uiManager.ShowLastMove("Select one of your highlighted pits");
-                uiManager.StartTurnTimer();
                 List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
                 uiManager.HighlightLegalMoves(legalMoves);
             }
@@ -281,7 +291,6 @@ namespace NsoloGame.Unity
             boardHistory.Push(gameBoard.Clone());
 
             CancelHintSearch();
-            uiManager.StopTurnTimer();
 
             GameBoard startingBoard = gameBoard.Clone();
             MoveResult moveResult = ApplyMoveWithLandingTrace(pendingMove, humanPlayer);
@@ -514,6 +523,7 @@ namespace NsoloGame.Unity
             int p2Stones = gameBoard != null ? gameEngine.GetPlayerStones(gameBoard, 2) : 0;
 
             float elapsed = Time.time - gameStartTime;
+            LastGameSeconds = elapsed;
             bool humanWon = winner == humanPlayer;
             ProfileManager.Instance?.RecordGameResult((int)aiDifficulty, humanWon, elapsed);
 
