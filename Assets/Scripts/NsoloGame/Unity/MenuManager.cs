@@ -10,7 +10,6 @@ namespace NsoloGame.Unity
         [SerializeField] private GameObject welcomePanel;
         [SerializeField] private GameObject tutorialPanel;
         [SerializeField] private GameObject difficultyPanel;
-        [SerializeField] private GameObject settingsPanel;
         [SerializeField] private GameObject profilePanel;
         [SerializeField] private GameObject pausePanel;
         [SerializeField] private GameObject gameOverPanel;
@@ -18,6 +17,10 @@ namespace NsoloGame.Unity
         [Header("Game")]
         [SerializeField] private GameController gameController;
         [SerializeField] private GameObject gameplayRoot;
+
+        [Header("Welcome")]
+        [Tooltip("Greeting on the welcome screen. Refreshed from the saved profile each time it opens.")]
+        [SerializeField] private TMP_Text welcomeUsernameText;
 
         [Header("Difficulty Selection")]
         [SerializeField] private GameObject easySelectionHighlight;
@@ -36,6 +39,12 @@ namespace NsoloGame.Unity
         [SerializeField] private TMP_Text gameOverTitleText;
         [SerializeField] private TMP_Text finalPlayerCapturedText;
         [SerializeField] private TMP_Text finalAiCapturedText;
+        [SerializeField] private TMP_Text gameOverDifficultyText;
+        [SerializeField] private TMP_Text gameOverTimeText;
+        [SerializeField] private TMP_Text gameOverVictoryCountText;
+        [SerializeField] private TMP_Text gameOverSummaryText;
+
+        private static readonly string[] DifficultyNames = { "EASY", "MEDIUM", "HARD" };
 
         // Fired whenever the SFX slider changes so PitStoneVisualizer can update its volume
         public static event System.Action<float> SFXVolumeChanged;
@@ -79,7 +88,16 @@ namespace NsoloGame.Unity
             ResolveGameController();
             gameController?.SetPaused(false);
             SetGameplayVisible(false);
+            RefreshWelcomeUsername();
             ShowOnly(welcomePanel);
+        }
+
+        /// <summary>Re-reads the saved username so a rename on the profile page shows up here.</summary>
+        public void RefreshWelcomeUsername()
+        {
+            if (welcomeUsernameText == null) return;
+            string name = ProfileManager.Instance?.Username;
+            welcomeUsernameText.text = string.IsNullOrWhiteSpace(name) ? "Player" : name;
         }
 
         public void ShowTutorial()
@@ -88,17 +106,24 @@ namespace NsoloGame.Unity
             ShowOnly(tutorialPanel);
         }
 
-        public void ShowSettings()
-        {
-            SetGameplayVisible(false);
-            ShowOnly(settingsPanel);
-        }
-
         public void ShowProfile()
         {
             ProfileManager.Instance?.RefreshProfileUI();
             SetGameplayVisible(false);
             ShowOnly(profilePanel);
+        }
+
+        /// <summary>
+        /// Closes the app. Wire this to the welcome screen's Quit button. Application.Quit is a
+        /// no-op inside the editor, so play mode is stopped explicitly to keep the button testable.
+        /// </summary>
+        public void QuitGame()
+        {
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.isPlaying = false;
+#else
+            Application.Quit();
+#endif
         }
 
         // ── Difficulty Panel ──────────────────────────────────────────────
@@ -270,12 +295,35 @@ namespace NsoloGame.Unity
             SetPanelActive(pausePanel, false);
             SetGameplayVisible(true);
 
+            bool playerWon = winner == 1;
+
             if (gameOverTitleText != null)
-                gameOverTitleText.text = winner == 1 ? "VICTORY" : "DEFEAT";
+                gameOverTitleText.text = playerWon ? "VICTORY" : "DEFEAT";
             if (finalPlayerCapturedText != null)
                 finalPlayerCapturedText.text = playerCaptured.ToString();
             if (finalAiCapturedText != null)
                 finalAiCapturedText.text = aiCaptured.ToString();
+
+            if (gameOverDifficultyText != null)
+            {
+                int d = gameController != null ? gameController.CurrentDifficulty : -1;
+                gameOverDifficultyText.text =
+                    d >= 0 && d < DifficultyNames.Length ? DifficultyNames[d] : "--";
+            }
+
+            if (gameOverTimeText != null)
+            {
+                float seconds = gameController != null ? gameController.LastGameSeconds : 0f;
+                gameOverTimeText.text = $"{(int)(seconds / 60):00}:{(int)(seconds % 60):00}";
+            }
+
+            if (gameOverVictoryCountText != null)
+                gameOverVictoryCountText.text = (ProfileManager.Instance?.GamesWon ?? 0).ToString();
+
+            if (gameOverSummaryText != null)
+                gameOverSummaryText.text = playerWon
+                    ? $"You: {playerCaptured} - {aiCaptured}"
+                    : $"AI: {aiCaptured} - {playerCaptured}";
 
             SetPanelActive(gameOverPanel, true);
         }
@@ -293,7 +341,6 @@ namespace NsoloGame.Unity
             SetPanelActive(welcomePanel,    false);
             SetPanelActive(tutorialPanel,   false);
             SetPanelActive(difficultyPanel, false);
-            SetPanelActive(settingsPanel,   false);
             SetPanelActive(profilePanel,    false);
             SetPanelActive(pausePanel,      false);
             SetPanelActive(gameOverPanel,   false);

@@ -115,21 +115,18 @@ namespace NsoloGame.Core
 
                     if (opponentInnerStones >= 1 && opponentOuterStones >= 1)
                     {
-                        // Rule 2 (capture branch): zero out all three pits, then resow the
-                        // gathered stones starting after the ORIGINAL pit picked up this turn
-                        // (not the capture site) — the capture-restart rule. These stones are
-                        // never set aside in a separate "captured" pile; they're simply
-                        // relocated onto the board, which is why a player's score is just
-                        // their live pit total.
-                        int captured = finalValue + opponentInnerStones + opponentOuterStones;
-                        newBoard.Set(landR, landC, 0);
+                        // Rule 2 (capture branch): zero out only the opponent's two same-column
+                        // pits, then resow those stones starting after the ORIGINAL pit picked
+                        // up this turn (capture-restart rule). The player's landing pit keeps
+                        // its stones — they are not scooped or resown.
+                        int captured = opponentInnerStones + opponentOuterStones;
                         newBoard.Set(opponentInnerRow, landC, 0);
                         newBoard.Set(opponentOuterRow, landC, 0);
 
                         totalCaptured += captured;
 
-                        var extraSources = new List<(int r, int c)> { (opponentInnerRow, landC), (opponentOuterRow, landC) };
-                        currentIndex = SowSegment(newBoard, player, originalIndex, captured, (landR, landC), landingSequence, sowingSegments, extraSources);
+                        var extraSources = new List<(int r, int c)> { (opponentOuterRow, landC) };
+                        currentIndex = SowSegment(newBoard, player, originalIndex, captured, (opponentInnerRow, landC), landingSequence, sowingSegments, extraSources);
                         continue;
                     }
                     else

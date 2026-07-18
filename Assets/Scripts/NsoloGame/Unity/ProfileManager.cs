@@ -74,6 +74,12 @@ namespace NsoloGame.Unity
         [SerializeField] private TMP_Text hardWinsText;
         [SerializeField] private TMP_Text breakdownText;
 
+        [Header("Username Editing")]
+        [Tooltip("Optional. If assigned, the Edit button focuses this field and submitting it saves " +
+                 "the name. If left empty, the device's on-screen keyboard is opened directly.")]
+        [SerializeField] private TMP_InputField usernameInput;
+        [SerializeField] private int maxUsernameLength = 16;
+
         [Header("Achievements")]
         [Tooltip("The three achievement icons shown below the edit button. Drag each icon group here and pick which achievement it represents.")]
         [SerializeField] private AchievementSlot[] achievementSlots;
@@ -92,6 +98,15 @@ namespace NsoloGame.Unity
 
         private static ProfileManager _instance;
         public static ProfileManager Instance => _instance;
+
+        /// <summary>Lifetime wins, for the game-over panel's victory counter.</summary>
+        public int GamesWon => profile?.gamesWon ?? 0;
+
+        /// <summary>The saved display name, for any screen that wants to greet the player.</summary>
+        public string Username => profile?.username;
+
+        // Only used on the fallback path, when no TMP_InputField is wired up.
+        private TouchScreenKeyboard nameKeyboard;
 
         private void Awake()
         {
@@ -265,18 +280,81 @@ namespace NsoloGame.Unity
 
             if (breakdownText != null)
                 breakdownText.text =
-                    $"Easy: {profile.easyWins}W/{profile.easyLosses}L  " +
-                    $"Medium: {profile.mediumWins}W/{profile.mediumLosses}L  " +
-                    $"Hard: {profile.hardWins}W/{profile.hardLosses}L";
+                    $"  Easy: {profile.easyWins}W/{profile.easyLosses}L" +
+                    $"     Medium: {profile.mediumWins}W/{profile.mediumLosses}L" +
+                    $"     Hard: {profile.hardWins}W/{profile.hardLosses}L";
 
             RefreshAchievements();
         }
 
-        // ── Called by an Edit Profile input field ─────────────────────────
+        // ── Username editing ──────────────────────────────────────────────
+
+        /// <summary>
+        /// Hook this to the profile page's Edit (pen) button. Focuses the username field and raises
+        /// the on-screen keyboard; the name is saved when the player confirms with enter/go.
+        /// </summary>
+        public void BeginEditUsername()
+        {
+            if (profile == null) return;
+
+            if (usernameInput != null)
+            {
+                usernameInput.gameObject.SetActive(true);
+                usernameInput.characterLimit = maxUsernameLength;
+                usernameInput.text = profile.username;
+
+                // Re-registering every time would stack duplicate listeners across edits.
+                usernameInput.onEndEdit.RemoveListener(CommitUsernameEdit);
+                usernameInput.onEndEdit.AddListener(CommitUsernameEdit);
+
+                usernameInput.Select();
+                usernameInput.ActivateInputField();
+                return;
+            }
+
+            if (TouchScreenKeyboard.isSupported)
+            {
+                nameKeyboard = TouchScreenKeyboard.Open(
+                    profile.username, TouchScreenKeyboardType.Default,
+                    autocorrection: false, multiline: false, secure: false,
+                    alert: false, textPlaceholder: "Username", characterLimit: maxUsernameLength);
+            }
+            else
+            {
+                Debug.LogWarning("ProfileManager: no usernameInput assigned and no on-screen " +
+                                 "keyboard available, so the name cannot be edited here.");
+            }
+        }
+
+        private void Update()
+        {
+            if (nameKeyboard == null) return;
+
+            if (nameKeyboard.status == TouchScreenKeyboard.Status.Done)
+                SetUsername(nameKeyboard.text);
+
+            // Done, cancelled or lost — either way we're finished with this keyboard.
+            if (nameKeyboard.status != TouchScreenKeyboard.Status.Visible)
+                nameKeyboard = null;
+        }
+
+        private void CommitUsernameEdit(string value)
+        {
+            SetUsername(value);
+            if (usernameInput != null)
+            {
+                usernameInput.DeactivateInputField();
+                usernameInput.gameObject.SetActive(false);
+            }
+        }
 
         public void SetUsername(string name)
         {
-            profile.username = string.IsNullOrWhiteSpace(name) ? "Player" : name.Trim();
+            string trimmed = string.IsNullOrWhiteSpace(name) ? "Player" : name.Trim();
+            if (trimmed.Length > maxUsernameLength)
+                trimmed = trimmed.Substring(0, maxUsernameLength);
+
+            profile.username = trimmed;
             Save();
             if (usernameText != null) usernameText.text = profile.username;
         }
