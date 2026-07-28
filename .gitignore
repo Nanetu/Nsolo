@@ -20,3 +20,6 @@ Assets/Materials/Fonts
 *.suo
 *.user
 *.userprefs
+# Local backups made by Tools/trim_menu_art.py
+/Tools/_art_backup/
+/.venv/

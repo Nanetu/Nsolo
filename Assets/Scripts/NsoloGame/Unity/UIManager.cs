@@ -30,8 +30,10 @@ namespace NsoloGame.Unity
 
         [Header("HUD — Buttons")]
         [SerializeField] private Button undoButton;
-        [SerializeField] private Button hintButton;
-        [SerializeField] private Button endTurnButton;
+        [Tooltip("The bottom-centre pill. It doubles as START while the player is arranging their " +
+                 "stones and as HINT once play begins, so both share one spot on the background art.")]
+        [SerializeField] private Button actionButton;
+        [SerializeField] private TMP_Text actionButtonLabel;
 
         [Header("Highlighting")]
         [SerializeField] private Color normalColor = Color.white;
@@ -208,6 +210,21 @@ namespace NsoloGame.Unity
         public void SetUndoInteractable(bool value)
         {
             if (undoButton != null) undoButton.interactable = value;
+        }
+
+        /// <summary>
+        /// Relabels the shared bottom pill. The button's own Image is transparent (the pill is
+        /// painted into the background art), so the disabled tint never shows — the label is faded
+        /// by hand instead to signal when the button is dead.
+        /// </summary>
+        public void SetActionButton(string label, bool interactable)
+        {
+            if (actionButton != null) actionButton.interactable = interactable;
+
+            if (actionButtonLabel == null) return;
+            actionButtonLabel.text = label;
+            Color c = actionButtonLabel.color;
+            actionButtonLabel.color = new Color(c.r, c.g, c.b, interactable ? 1f : 0.4f);
         }
 
         public IEnumerator PlayMoveAnimation(GameBoard startingBoard, MoveResult moveResult)

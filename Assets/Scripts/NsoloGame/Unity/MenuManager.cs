@@ -186,12 +186,13 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
-        /// Hook for the pre-game formation phase's Ready button (wire this up in the scene).
+        /// Hook for the bottom pill, which is START during the formation phase and HINT afterwards.
+        /// GameController owns the decision since it is the one tracking the phase.
         /// </summary>
-        public void OnReadyButtonPressed()
+        public void OnActionButtonPressed()
         {
             ResolveGameController();
-            gameController?.ConfirmFormationReady();
+            gameController?.OnActionButtonPressed();
         }
 
         public void TogglePause()

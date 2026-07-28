@@ -60,6 +60,10 @@ namespace NsoloGame.Unity
         private int formationHeldFromCol;
         private System.Random formationRandom = new System.Random();
 
+        // The bottom pill is one button wearing two hats — see OnActionButtonPressed.
+        private const string ActionLabelStart = "START";
+        private const string ActionLabelHint = "HINT";
+
         public event System.Action<int, int, int> GameOver;
         public GameState CurrentState => gameState;
         public int CurrentDifficulty => (int)aiDifficulty;
@@ -145,6 +149,34 @@ namespace NsoloGame.Unity
             uiManager.ClearLastMove();
             uiManager.SetUndoInteractable(false);
             uiManager.ClearHighlights();
+            RefreshActionButton();
+        }
+
+        // ── Action Button (START / HINT) ─────────────────────────────────────
+
+        /// <summary>
+        /// The single pill at the bottom of the board. There is only one button because the
+        /// background art only has room for one: it commits the opening formation while the
+        /// player is still arranging, and asks for a hint from then on.
+        /// </summary>
+        public void OnActionButtonPressed()
+        {
+            if (gameState == GameState.PreGameFormation)
+                ConfirmFormationReady();
+            else
+                RequestHint();
+        }
+
+        /// <summary>
+        /// Points the pill at whichever job the current state calls for. Called from every place
+        /// that moves the game between states, next to the matching ShowStatus call.
+        /// </summary>
+        private void RefreshActionButton()
+        {
+            bool arranging = gameState == GameState.PreGameFormation;
+            uiManager?.SetActionButton(
+                arranging ? ActionLabelStart : ActionLabelHint,
+                arranging || gameState == GameState.HumanTurn);
         }
 
         // ── Pre-Game Formation Phase ─────────────────────────────────────────
@@ -212,6 +244,9 @@ namespace NsoloGame.Unity
             // The clock starts the moment the player commits their formation, whichever side moves
             // first — arranging stones shouldn't count against the game time.
             uiManager.StartTurnTimer();
+
+            // From here on the pill is the hint button.
+            RefreshActionButton();
 
             if (gameState == GameState.HumanTurn)
             {
@@ -295,6 +330,7 @@ namespace NsoloGame.Unity
             GameBoard startingBoard = gameBoard.Clone();
             MoveResult moveResult = ApplyMoveWithLandingTrace(pendingMove, humanPlayer);
             uiManager.ShowStatus("Sowing");
+            RefreshActionButton();
             yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
             gameBoard = moveResult.Board;
             ShowMoveFeedback(moveResult, "You");
@@ -364,6 +400,7 @@ namespace NsoloGame.Unity
             // Undo is only allowed during the human's turn, so (re)enable it here rather than
             // during the move animation. This reverts the human's last move and the AI's reply.
             uiManager.SetUndoInteractable(boardHistory.Count > 0);
+            RefreshActionButton();
             List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
             uiManager.HighlightLegalMoves(legalMoves);
         }
@@ -517,6 +554,7 @@ namespace NsoloGame.Unity
             CancelAiThinking();
             CancelHintSearch();
             gameState = GameState.GameOver;
+            RefreshActionButton();
 
             // Score is just each player's live pit total — there's no separate captured pile.
             int p1Stones = gameBoard != null ? gameEngine.GetPlayerStones(gameBoard, 1) : 0;
