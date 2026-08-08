@@ -14,6 +14,8 @@ namespace NsoloGame.Unity
         [SerializeField] private GameObject[] holes = new GameObject[32];
         [SerializeField] private PitStoneVisualizer stoneVisualizer;
         [SerializeField] private GameController gameController;
+        [Tooltip("Draws the stone count over each pit. Auto-found on this object if left empty.")]
+        [SerializeField] private PitCountLabels pitCountLabels;
         [SerializeField] private bool showStartingBoardIfNoControllerRefresh = true;
 
         [Header("HUD — Status")]
@@ -48,6 +50,13 @@ namespace NsoloGame.Unity
         private bool hasReceivedBoardState;
         private Camera inputCamera;
         private int lastHandledInputFrame = -1;
+
+        // Double-tap-to-skip. The slop radius is generous because a deliberate double tap on a
+        // phone rarely lands twice on the same pixel.
+        private const float DoubleTapSeconds = 0.45f;
+        private const float DoubleTapSlopPixels = 120f;
+        private float lastTapTime = -1f;
+        private Vector2 lastTapPosition;
 
         // Timer. This is a single game clock, not a per-turn one. StartTurnTimer is idempotent, so
         // the repeated calls as turns hand off leave it running; it only stops at game over. Pause
@@ -116,7 +125,20 @@ namespace NsoloGame.Unity
                 stoneVisualizer.SetHoles(holes);
             else
                 Debug.LogWarning("UIManager: PitStoneVisualizer not assigned.");
+
+            // After SetHoles, so the pit transforms the labels attach to actually resolve. Added
+            // automatically when absent, so counts work without anything being wired up — drop a
+            // PitCountLabels onto this object by hand if you want its sizing exposed in the
+            // Inspector.
+            if (pitCountLabels == null) pitCountLabels = GetComponent<PitCountLabels>();
+            if (pitCountLabels == null) pitCountLabels = gameObject.AddComponent<PitCountLabels>();
+            pitCountLabels.Initialize(stoneVisualizer, turnStatusText);
         }
+
+        /// <summary>Hook for a "Show pit counts" setting.</summary>
+        public void SetPitCountsVisible(bool value) => pitCountLabels?.SetVisible(value);
+
+        public bool PitCountsVisible => pitCountLabels == null || pitCountLabels.Visible;
 
         private void Update()
         {
@@ -139,6 +161,7 @@ namespace NsoloGame.Unity
             hasReceivedBoardState = board != null;
             stoneVisualizer?.Refresh(board);
             UpdateScores(board);
+            pitCountLabels?.Refresh(board);
         }
 
         /// <summary>
@@ -229,11 +252,41 @@ namespace NsoloGame.Unity
 
         public IEnumerator PlayMoveAnimation(GameBoard startingBoard, MoveResult moveResult)
         {
+            ResetTapTracking();
+
+            // Numbers would lag a frame behind stones in flight, and a wrong count is worse than
+            // none — so they go away for the move and come back once the board has settled.
+            pitCountLabels?.HideDuringAnimation();
+
             if (stoneVisualizer != null)
                 yield return stoneVisualizer.PlayMoveAnimation(startingBoard, moveResult);
 
             if (moveResult != null)
+            {
                 UpdateScores(moveResult.Board);
+                pitCountLabels?.Refresh(moveResult.Board);
+            }
+        }
+
+        /// <summary>
+        /// Subscribes GameController to each sowing segment as it begins, so relay and capture can
+        /// be explained while they are happening instead of once the whole chain has finished.
+        /// </summary>
+        public void SetSowingSegmentListener(System.Action<SowingSegment, int> listener)
+        {
+            stoneVisualizer?.SetSegmentListener(listener);
+        }
+
+        /// <summary>Fast-forwards a move in progress. False when there is nothing to skip.</summary>
+        public bool TrySkipMoveAnimation()
+        {
+            return stoneVisualizer != null && stoneVisualizer.TrySkipAnimation();
+        }
+
+        /// <summary>Abandons a move in progress, for when undo interrupts the AI.</summary>
+        public void CancelMoveAnimation()
+        {
+            stoneVisualizer?.CancelAnimation();
         }
 
         // ── Timer ─────────────────────────────────────────────────────────
@@ -318,17 +371,58 @@ namespace NsoloGame.Unity
 
         private void HandlePointerInput()
         {
-            if (IsPointerOverUi()) return;
-
             if (Input.touchCount > 0)
             {
                 Touch t = Input.GetTouch(0);
-                if (t.phase == TouchPhase.Began) TrySelectPitAtScreenPosition(t.position);
+                if (t.phase == TouchPhase.Began) HandleTapDown(t.position);
                 return;
             }
 
             if (Input.GetMouseButtonDown(0))
-                TrySelectPitAtScreenPosition(Input.mousePosition);
+                HandleTapDown(Input.mousePosition);
+        }
+
+        /// <summary>
+        /// Routes a tap. Two taps in quick succession near the same spot skip a sowing animation in
+        /// progress; anything else falls through to normal pit selection. Unscaled time, because
+        /// the board is frozen while a tutorial tip is up.
+        ///
+        /// The UI check deliberately guards only pit selection, not the skip. The tip promises
+        /// "double tap anywhere", and every TMP label in the HUD is a raycast target by default, so
+        /// gating the whole method on it made the gesture die wherever the player happened to tap.
+        /// </summary>
+        private void HandleTapDown(Vector2 screenPos)
+        {
+            float now = Time.unscaledTime;
+            bool isDoubleTap =
+                lastTapTime > 0f &&
+                now - lastTapTime <= DoubleTapSeconds &&
+                (screenPos - lastTapPosition).sqrMagnitude <= DoubleTapSlopPixels * DoubleTapSlopPixels;
+
+            lastTapPosition = screenPos;
+            lastTapTime = now;
+
+            if (isDoubleTap && gameController != null && gameController.TrySkipAnimation())
+            {
+                // Consumed. Cleared so a third tap cannot immediately chain into another double.
+                lastTapTime = -1f;
+                return;
+            }
+
+            // A failed skip attempt used to clear the timestamp, which ate the pairing and left the
+            // player tapping four times to skip once. The tap now stays available to pair with.
+
+            if (IsPointerOverUi()) return;
+            TrySelectPitAtScreenPosition(screenPos);
+        }
+
+        /// <summary>
+        /// Forgets the last tap. Called as a move begins so the tap that chose the pit cannot pair
+        /// with the player's first skip tap and be swallowed as a premature double.
+        /// </summary>
+        private void ResetTapTracking()
+        {
+            lastTapTime = -1f;
         }
 
         private void TrySelectPitAtScreenPosition(Vector2 screenPos)

@@ -133,6 +133,26 @@ namespace NsoloGame.Unity
             }
         }
 
+        private void OnEnable()
+        {
+            // MenuManager raises this when the SFX slider moves. Nothing had ever subscribed, so
+            // the slider wrote a pref and changed nothing audible — the stone sounds were really
+            // being scaled by the *music* slider via AudioListener.volume.
+            MenuManager.SFXVolumeChanged += ApplySfxVolume;
+            ApplySfxVolume(PlayerPrefs.GetFloat(AudioManager.SfxVolumeKey, 0.85f));
+        }
+
+        private void OnDisable()
+        {
+            MenuManager.SFXVolumeChanged -= ApplySfxVolume;
+        }
+
+        private void ApplySfxVolume(float value)
+        {
+            if (audioSource != null)
+                audioSource.volume = Mathf.Clamp01(value);
+        }
+
         private void OnDestroy()
         {
             Log("OnDestroy() clearing spawned stones immediately.");
@@ -200,6 +220,26 @@ namespace NsoloGame.Unity
                 yield break;
 
             yield return animator.PlayMoveAnimation(startingBoard, moveResult);
+        }
+
+        /// <summary>Hands GameController a per-segment hook into the sowing animation.</summary>
+        public void SetSegmentListener(System.Action<SowingSegment, int> listener)
+        {
+            animator?.SetSegmentListener(listener);
+        }
+
+        /// <summary>Fast-forwards a move in progress. False when nothing is animating.</summary>
+        public bool TrySkipAnimation()
+        {
+            return animator != null && animator.TryRequestSkip();
+        }
+
+        public bool IsAnimating => animator != null && animator.IsAnimating;
+
+        /// <summary>Abandons a move in progress. Used when undo interrupts the AI.</summary>
+        public void CancelAnimation()
+        {
+            animator?.CancelAnimation();
         }
 
         internal Transform GetPitTransform(int row, int col)

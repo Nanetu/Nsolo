@@ -141,7 +141,10 @@ namespace NsoloGame.Unity
         {
             if (_instance != null && _instance != this)
             {
-                Destroy(gameObject);
+                // Same trap as AudioManager: a duplicate on the same object must only remove the
+                // spare component, or the whole GameObject and its siblings go with it.
+                if (_instance.gameObject == gameObject) Destroy(this);
+                else Destroy(gameObject);
                 return;
             }
             _instance = this;

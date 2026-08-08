@@ -23,3 +23,11 @@ Assets/Materials/Fonts
 # Local backups made by Tools/trim_menu_art.py
 /Tools/_art_backup/
 /.venv/
+# Raw third-party sound packs. The clips actually used are copied into Assets/Audio.
+/Assets/Casual Game Sounds U6/
+/Assets/Casual Game Sounds U6.meta
+/Assets/UI Soundpack/
+/Assets/UI Soundpack.meta
+# Unused 37MB intermediate export
+/Assets/Audio/artifact.mp3_trimmed.wav
+/Assets/Audio/artifact.mp3_trimmed.wav.meta
