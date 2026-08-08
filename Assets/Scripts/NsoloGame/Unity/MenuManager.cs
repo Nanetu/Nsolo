@@ -35,6 +35,13 @@ namespace NsoloGame.Unity
         [SerializeField] private TMP_Text musicVolumeLabel;
         [SerializeField] private TMP_Text sfxVolumeLabel;
 
+        [Header("Pause — Tutorial Tips")]
+        [Tooltip("Optional. A Toggle for the in-game tips. Duplicating the vibration row is the " +
+                 "easy way to build one — the VibrationSwitch that comes with the copy drives its " +
+                 "own knob and ON/OFF caption, so only this slot needs filling. Leave empty and " +
+                 "use ToggleTutorialTips or DisableTutorialTips from a plain Button instead.")]
+        [SerializeField] private Toggle tutorialTipsToggle;
+
         [Header("Game Over Text")]
         [SerializeField] private TMP_Text gameOverTitleText;
         [SerializeField] private TMP_Text finalPlayerCapturedText;
@@ -62,10 +69,13 @@ namespace NsoloGame.Unity
         {
             ResolveGameController();
             SubscribeToGameOver();
+            TutorialCoach.TipsSettingChanged += RefreshTutorialToggle;
         }
 
         private void OnDisable()
         {
+            TutorialCoach.TipsSettingChanged -= RefreshTutorialToggle;
+
             if (gameController != null && subscribedToGameOver)
             {
                 gameController.GameOver -= HandleGameOver;
@@ -83,6 +93,9 @@ namespace NsoloGame.Unity
 
         public void ShowWelcome()
         {
+            // Dropped before the timescale is reset: a tip left on screen would otherwise restore
+            // whatever scale it captured and freeze the menu behind it.
+            TutorialCoach.Instance?.ForceHide();
             Time.timeScale = 1f;
             isPaused = false;
             ResolveGameController();
@@ -90,6 +103,7 @@ namespace NsoloGame.Unity
             SetGameplayVisible(false);
             RefreshWelcomeUsername();
             ShowOnly(welcomePanel);
+            AudioManager.StartMenuMusic();
         }
 
         /// <summary>Re-reads the saved username so a rename on the profile page shows up here.</summary>
@@ -204,6 +218,15 @@ namespace NsoloGame.Unity
             Time.timeScale = isPaused ? 0f : 1f;
             gameController.SetPaused(isPaused);
             SetPanelActive(pausePanel, isPaused);
+
+            // The coach can switch itself off mid-game once the last tip has been seen, and this
+            // is the first moment the control is visible again — so it re-reads the setting rather
+            // than showing whatever state it was left in.
+            if (isPaused) RefreshTutorialToggle();
+
+            AudioManager.Click();
+            Haptics.Light();
+            if (isPaused) TutorialCoach.Show(TutorialTip.PauseButton);
         }
 
         public void ResumeGame()
@@ -217,6 +240,7 @@ namespace NsoloGame.Unity
 
         public void RestartGame()
         {
+            TutorialCoach.Instance?.ForceHide();
             Time.timeScale = 1f;
             isPaused = false;
             HideAllPanels();
@@ -230,11 +254,13 @@ namespace NsoloGame.Unity
 
         private void InitSettingsSliders()
         {
-            float music = PlayerPrefs.GetFloat("MusicVolume", 0.7f);
-            float sfx   = PlayerPrefs.GetFloat("SFXVolume",   0.85f);
-            bool vib    = PlayerPrefs.GetInt("Vibration", 1) == 1;
+            float music = PlayerPrefs.GetFloat(AudioManager.MusicVolumeKey, 0.7f);
+            float sfx   = PlayerPrefs.GetFloat(AudioManager.SfxVolumeKey,   0.85f);
+            bool vib    = Haptics.Enabled;
 
-            AudioListener.volume = music;
+            // AudioListener.volume is deliberately left alone. It is a master volume, so driving
+            // it from the music slider also quietened every sound effect — AudioManager now gives
+            // music and SFX a source each, and applies the saved levels itself on Awake.
 
             if (musicVolumeSlider != null)
             {
@@ -251,32 +277,98 @@ namespace NsoloGame.Unity
                 vibrationToggle.isOn = vib;
                 vibrationToggle.onValueChanged.AddListener(OnVibrationToggled);
             }
+            if (tutorialTipsToggle != null)
+            {
+                tutorialTipsToggle.isOn = TutorialCoach.Instance?.TipsEnabled ?? false;
+                tutorialTipsToggle.onValueChanged.AddListener(OnTutorialTipsToggled);
+            }
 
             UpdateSettingsLabels(music, sfx);
+            RefreshTutorialToggle();
         }
 
         public void OnMusicVolumeChanged(float value)
         {
-            AudioListener.volume = value;
-            PlayerPrefs.SetFloat("MusicVolume", value);
-            PlayerPrefs.Save();
+            AudioManager.Instance?.SetMusicVolume(value);
             if (musicVolumeLabel != null)
                 musicVolumeLabel.text = $"[{Mathf.RoundToInt(value * 100)}%]";
         }
 
         public void OnSFXVolumeChanged(float value)
         {
-            PlayerPrefs.SetFloat("SFXVolume", value);
-            PlayerPrefs.Save();
+            AudioManager.Instance?.SetSfxVolume(value);
             if (sfxVolumeLabel != null)
                 sfxVolumeLabel.text = $"[{Mathf.RoundToInt(value * 100)}%]";
+
+            // Board audio lives on its own AudioSource inside PitStoneVisualizer, which listens
+            // for this rather than being reachable from here.
             SFXVolumeChanged?.Invoke(value);
         }
 
+        /// <summary>
+        /// Routed through Haptics rather than writing the pref directly, so its cached copy of the
+        /// setting cannot go stale and keep buzzing after the switch is turned off.
+        /// </summary>
         public void OnVibrationToggled(bool value)
         {
-            PlayerPrefs.SetInt("Vibration", value ? 1 : 0);
-            PlayerPrefs.Save();
+            Haptics.SetEnabled(value);
+        }
+
+        /// <summary>Optional hook for a "Show tips again" button in the pause settings.</summary>
+        public void ResetTutorialTips()
+        {
+            TutorialCoach.Instance?.ResetAllTips();
+        }
+
+        // ── Tutorial tips setting ─────────────────────────────────────────
+        // Tips are on by default and stay on until the player turns them off. Three shapes are
+        // offered so the pause-menu control can be whatever suits the art: a Toggle (wire to
+        // OnTutorialTipsToggled), a plain Button that flips it (ToggleTutorialTips), or a button
+        // that only ever switches them off (DisableTutorialTips).
+
+        /// <summary>Wire to a Toggle's On Value Changed, like the vibration switch.</summary>
+        public void OnTutorialTipsToggled(bool value)
+        {
+            TutorialCoach.Instance?.SetTipsEnabled(value);
+            RefreshTutorialToggle();
+            Haptics.Light();
+        }
+
+        /// <summary>Wire to a plain Button to flip tips on and off.</summary>
+        public void ToggleTutorialTips()
+        {
+            TutorialCoach coach = TutorialCoach.Instance;
+            if (coach == null) return;
+            OnTutorialTipsToggled(!coach.TipsEnabled);
+        }
+
+        /// <summary>Wire to a one-way "Disable tutorial" button.</summary>
+        public void DisableTutorialTips()
+        {
+            OnTutorialTipsToggled(false);
+        }
+
+        /// <summary>
+        /// Keeps the optional Toggle in step with the saved setting. Safe to call with nothing
+        /// assigned, which is the case until the pause menu gets its control.
+        ///
+        /// The ON/OFF caption is deliberately not handled here: a switch built by duplicating the
+        /// vibration row carries its own VibrationSwitch, which listens to the same Toggle and
+        /// already moves the knob and rewrites the caption. Setting the text from here as well
+        /// would just be two things fighting over one label.
+        /// </summary>
+        private void RefreshTutorialToggle()
+        {
+            if (tutorialTipsToggle == null) return;
+
+            bool on = TutorialCoach.Instance?.TipsEnabled ?? false;
+            if (tutorialTipsToggle.isOn == on) return;
+
+            // Set without firing our own listener, or flipping it would recurse back through here.
+            // VibrationSwitch keeps its listener attached, so the knob still animates.
+            tutorialTipsToggle.onValueChanged.RemoveListener(OnTutorialTipsToggled);
+            tutorialTipsToggle.isOn = on;
+            tutorialTipsToggle.onValueChanged.AddListener(OnTutorialTipsToggled);
         }
 
         private void UpdateSettingsLabels(float music, float sfx)

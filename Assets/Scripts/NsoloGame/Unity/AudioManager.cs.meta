@@ -1,0 +1,23 @@
+fileFormatVersion: 2
+guid: 4fe8125613a25c0d0d5ab4768d5d57bc
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - musicSource: {instanceID: 0}
+  - sfxSource: {instanceID: 0}
+  - menuMusic: {instanceID: 0}
+  - gameMusic: {fileID: 8300000, guid: e7a251c92ada75640b38e66ceb0ac1a9, type: 3}
+  - uiClick: {instanceID: 0}
+  - pitPickup: {instanceID: 0}
+  - stoneDrop: {instanceID: 0}
+  - capture: {instanceID: 0}
+  - illegalMove: {instanceID: 0}
+  - popup: {instanceID: 0}
+  - victory: {instanceID: 0}
+  - defeat: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

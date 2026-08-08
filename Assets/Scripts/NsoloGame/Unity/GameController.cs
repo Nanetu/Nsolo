@@ -37,6 +37,20 @@ namespace NsoloGame.Unity
         private Difficulty aiDifficulty;
 
         private Move pendingMove;
+
+        // Whose move the stone animator is currently playing, so HandleSowingSegment knows whether
+        // a capture is something the player did or something done to them.
+        private bool currentMoverIsHuman;
+
+        // How many sowing segments the move in flight has, used to hold the skip tip back until a
+        // chain is actually long enough that skipping it saves anything.
+        private int currentMoveSegmentCount;
+
+        // The coroutine playing the current move, held so undo can cut the AI's reply short.
+        private Coroutine activeMoveRoutine;
+
+        /// <summary>Segments a chain needs before the skip gesture is worth interrupting to teach.</summary>
+        private const int SkipTipMinimumSegments = 3;
         private Task<Move> aiMoveTask;
         private CancellationTokenSource aiMoveCancellation;
         private Move aiMove;
@@ -89,6 +103,10 @@ namespace NsoloGame.Unity
         {
             Log("Start()");
             InitializeSystems();
+
+            // Subscribed here rather than in Awake so PitStoneVisualizer has built its animator.
+            uiManager?.SetSowingSegmentListener(HandleSowingSegment);
+
             if (autoStartOnSceneLoad)
                 InitializeGame();
         }
@@ -150,6 +168,10 @@ namespace NsoloGame.Unity
             uiManager.SetUndoInteractable(false);
             uiManager.ClearHighlights();
             RefreshActionButton();
+
+            // Arranging happens in silence — the music waits for START.
+            AudioManager.Silence();
+            TutorialCoach.Show(TutorialTip.ArrangeStones);
         }
 
         // ── Action Button (START / HINT) ─────────────────────────────────────
@@ -245,6 +267,10 @@ namespace NsoloGame.Unity
             // first — arranging stones shouldn't count against the game time.
             uiManager.StartTurnTimer();
 
+            // Committing the formation is the point the game actually starts, so this is where
+            // the music comes in — not back at difficulty selection.
+            AudioManager.StartGameMusic();
+
             // From here on the pill is the hint button.
             RefreshActionButton();
 
@@ -254,6 +280,7 @@ namespace NsoloGame.Unity
                 uiManager.ShowLastMove("Select one of your highlighted pits");
                 List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
                 uiManager.HighlightLegalMoves(legalMoves);
+                TutorialCoach.Show(TutorialTip.YourPits);
             }
             else
             {
@@ -287,6 +314,20 @@ namespace NsoloGame.Unity
             Log($"OnHoleTouched({row},{col}) state={gameState}");
             if (isPaused) return;
 
+            // A modal tip is waiting on its Got It button — the board stays inert until it goes.
+            if (TutorialCoach.Instance != null && TutorialCoach.Instance.IsBlocking) return;
+
+            // Reaching across to the far side is the classic first-timer mistake, so it earns an
+            // explanation rather than silence — while arranging and during play alike.
+            if (!IsHumanRow(row) &&
+                (gameState == GameState.PreGameFormation || gameState == GameState.HumanTurn))
+            {
+                uiManager.ShowLastMove("Those rows belong to your opponent");
+                TutorialCoach.Show(TutorialTip.OpponentRows);
+                Haptics.Light();
+                return;
+            }
+
             if (gameState == GameState.PreGameFormation)
             {
                 OnFormationPitTouched(row, col);
@@ -311,12 +352,15 @@ namespace NsoloGame.Unity
                 uiManager.FlashIllegalMove(row, col);
                 uiManager.ShowStatus("Your turn");
                 gameState = GameState.HumanTurn;
+                AudioManager.Illegal();
+                Haptics.Light();
+                TutorialCoach.Show(TutorialTip.NeedTwoStones);
                 return;
             }
 
             gameState = GameState.ApplyingMove;
             pendingMove = selected;
-            StartCoroutine(ApplyHumanMoveCoroutine());
+            activeMoveRoutine = StartCoroutine(ApplyHumanMoveCoroutine());
         }
 
         private IEnumerator ApplyHumanMoveCoroutine()
@@ -325,10 +369,16 @@ namespace NsoloGame.Unity
             // turn actually resumes (after the AI replies), not during this animation.
             boardHistory.Push(gameBoard.Clone());
 
+            // Off while the player's own stones are in the air; it comes back the moment the AI
+            // takes over, and stays live right through the AI's reply.
+            uiManager.SetUndoInteractable(false);
+
             CancelHintSearch();
 
+            currentMoverIsHuman = true;
             GameBoard startingBoard = gameBoard.Clone();
             MoveResult moveResult = ApplyMoveWithLandingTrace(pendingMove, humanPlayer);
+            currentMoveSegmentCount = moveResult.SowingSegments?.Count ?? 0;
             uiManager.ShowStatus("Sowing");
             RefreshActionButton();
             yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
@@ -339,7 +389,7 @@ namespace NsoloGame.Unity
 
             gameState = GameState.AiThinking;
             uiManager.ShowStatus("Thinking...");
-            uiManager.SetUndoInteractable(false);
+            uiManager.SetUndoInteractable(boardHistory.Count > 0);
             StartAIMove();
         }
 
@@ -374,7 +424,7 @@ namespace NsoloGame.Unity
             if (aiMove != null)
             {
                 gameState = GameState.ApplyingMove;
-                StartCoroutine(ApplyAiMoveCoroutine(aiMove));
+                activeMoveRoutine = StartCoroutine(ApplyAiMoveCoroutine(aiMove));
             }
             else
             {
@@ -385,8 +435,10 @@ namespace NsoloGame.Unity
 
         private IEnumerator ApplyAiMoveCoroutine(Move move)
         {
+            currentMoverIsHuman = false;
             GameBoard startingBoard = gameBoard.Clone();
             MoveResult moveResult = ApplyMoveWithLandingTrace(move, aiPlayer);
+            currentMoveSegmentCount = moveResult.SowingSegments?.Count ?? 0;
             uiManager.ShowStatus("AI sowing");
             yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
             gameBoard = moveResult.Board;
@@ -394,6 +446,7 @@ namespace NsoloGame.Unity
 
             if (TryEndGameAfterMove(aiPlayer, humanPlayer)) yield break;
 
+            activeMoveRoutine = null;
             gameState = GameState.HumanTurn;
             uiManager.ShowStatus("Your turn");
             uiManager.StartTurnTimer();
@@ -407,9 +460,56 @@ namespace NsoloGame.Unity
 
         // ── Undo ─────────────────────────────────────────────────────────
 
+        /// <summary>
+        /// Undo is allowed on the player's own turn and, deliberately, right through the AI's reply
+        /// — while it is thinking and while its stones are still in the air. Waiting out a long
+        /// relay before being allowed to take back a move the player already regrets is just a
+        /// penalty for the AI being slow.
+        ///
+        /// This is safe because the history entry was pushed *before* the player's move, so
+        /// rewinding to it produces the same board whether or not the AI has replied yet. The
+        /// reply simply never happened.
+        /// </summary>
+        private bool CanUndoNow()
+        {
+            switch (gameState)
+            {
+                case GameState.HumanTurn:
+                    return true;
+                case GameState.AiThinking:
+                    return true;
+                // Only once the player's own sowing has resolved — interrupting their own move
+                // mid-flight would be rewinding something they are still watching happen.
+                case GameState.ApplyingMove:
+                    return !currentMoverIsHuman;
+                default:
+                    return false;
+            }
+        }
+
         public void UndoLastMove()
         {
-            if (gameState != GameState.HumanTurn || boardHistory.Count == 0) return;
+            if (boardHistory.Count == 0 || !CanUndoNow()) return;
+
+            TutorialCoach.Show(TutorialTip.UndoButton);
+            Haptics.Light();
+            AudioManager.Click();
+
+            bool interruptedAi = gameState != GameState.HumanTurn;
+
+            if (interruptedAi)
+            {
+                // Cut the AI off: stop the search, stop the coroutine driving its move, and clear
+                // the animator's flags by hand since its own cleanup will never run.
+                CancelAiThinking();
+                if (activeMoveRoutine != null)
+                {
+                    StopCoroutine(activeMoveRoutine);
+                    activeMoveRoutine = null;
+                }
+                uiManager.CancelMoveAnimation();
+                gameState = GameState.HumanTurn;
+            }
 
             CancelHintSearch();
             gameBoard = boardHistory.Pop();
@@ -417,7 +517,7 @@ namespace NsoloGame.Unity
 
             uiManager.UpdateDisplay(gameBoard);
             uiManager.ShowStatus("Your turn");
-            uiManager.ShowLastMove("Move undone");
+            uiManager.ShowLastMove(interruptedAi ? "Move undone — AI reply cancelled" : "Move undone");
             uiManager.StartTurnTimer();
 
             List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
@@ -429,6 +529,10 @@ namespace NsoloGame.Unity
         public void RequestHint()
         {
             if (gameState != GameState.HumanTurn || gameBoard == null) return;
+
+            TutorialCoach.Show(TutorialTip.HintButton);
+            Haptics.Light();
+            AudioManager.Click();
 
             CancelHintSearch();
             uiManager.ShowLastMove("Finding a hint...");
@@ -503,6 +607,51 @@ namespace NsoloGame.Unity
 
         // ── Internal ──────────────────────────────────────────────────────
 
+        /// <summary>
+        /// Called by the stone animator as each sowing segment begins, which is the moment the
+        /// mechanic it demonstrates actually happens — a tip raised here freezes the board
+        /// mid-move, so the player is looking at the relay or capture while reading about it.
+        ///
+        /// Segment 0 is the opening sow and teaches nothing. After that, a segment carrying
+        /// ExtraSources is a capture (stones scooped from the opponent's two pits), and anything
+        /// else is a relay.
+        /// </summary>
+        private void HandleSowingSegment(SowingSegment segment, int index)
+        {
+            if (segment == null || index == 0) return;
+
+            bool byHuman = currentMoverIsHuman;
+
+            if (segment.ExtraSources != null && segment.ExtraSources.Count > 0)
+            {
+                AudioManager.Capture();
+                Haptics.Medium();
+                TutorialCoach.Show(byHuman ? TutorialTip.FirstCapture : TutorialTip.CapturedByAi);
+                return;
+            }
+
+            if (!byHuman) return;
+
+            TutorialCoach.Show(TutorialTip.FirstRelay);
+
+            // Queued behind the relay explanation, and only on a chain long enough to be worth
+            // escaping. Dismissing it with a double tap also performs the skip, so the gesture the
+            // player just learned does exactly what it said it would.
+            if (currentMoveSegmentCount >= SkipTipMinimumSegments)
+                TutorialCoach.Show(TutorialTip.SkipAnimation, onDismissed: () => uiManager?.TrySkipMoveAnimation());
+        }
+
+        /// <summary>
+        /// Hook for a double tap on the board. Returns true when a move was actually fast-forwarded,
+        /// so UIManager knows the gesture was consumed and should not also select a pit.
+        /// </summary>
+        public bool TrySkipAnimation()
+        {
+            if (uiManager == null || !uiManager.TrySkipMoveAnimation()) return false;
+            Haptics.Light();
+            return true;
+        }
+
         private void ShowMoveFeedback(MoveResult moveResult, string actor)
         {
             string info = moveResult.CapturedStones > 0
@@ -564,6 +713,10 @@ namespace NsoloGame.Unity
             LastGameSeconds = elapsed;
             bool humanWon = winner == humanPlayer;
             ProfileManager.Instance?.RecordGameResult((int)aiDifficulty, humanWon, elapsed);
+
+            AudioManager.Silence();
+            AudioManager.GameOver(humanWon);
+            Haptics.Heavy();
 
             int loser = winner == humanPlayer ? aiPlayer : humanPlayer;
             PlayerPrefs.SetInt($"LastLoser_Diff{(int)aiDifficulty}", loser);

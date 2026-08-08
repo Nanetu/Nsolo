@@ -60,16 +60,74 @@ namespace NsoloGame.Unity
             stoneHitClip = clip;
         }
 
+        private System.Action<SowingSegment, int> segmentListener;
+
+        /// <summary>
+        /// Called as each sowing segment begins, with the segment and its index. Index 0 is the
+        /// opening sow; a later segment carrying ExtraSources is a capture, and any other later
+        /// segment is a relay. GameController listens so the explanations land at the moment the
+        /// mechanic happens rather than after the whole chain has played out.
+        /// </summary>
+        public void SetSegmentListener(System.Action<SowingSegment, int> listener)
+        {
+            segmentListener = listener;
+        }
+
+        /// <summary>True while a move is mid-flight, so a skip request has something to act on.</summary>
+        public bool IsAnimating { get; private set; }
+
+        private bool skipRequested;
+
+        /// <summary>
+        /// Fast-forwards the rest of the move to the settled board. Returns false when nothing is
+        /// animating, which lets the caller treat the gesture as unhandled.
+        /// </summary>
+        public bool TryRequestSkip()
+        {
+            if (!IsAnimating) return false;
+            skipRequested = true;
+            return true;
+        }
+
+        /// <summary>
+        /// Abandons a move mid-flight, for when undo cuts in during the AI's reply. The coroutine
+        /// is stopped from outside and never reaches its own cleanup, so the flags are cleared here
+        /// instead — otherwise IsAnimating would stay true forever and poison every later skip.
+        /// The stranded stones are dealt with by the Refresh that follows the undo.
+        /// </summary>
+        public void CancelAnimation()
+        {
+            IsAnimating = false;
+            skipRequested = false;
+        }
+
         public IEnumerator PlayMoveAnimation(GameBoard startingBoard, MoveResult moveResult)
         {
             if (startingBoard == null || moveResult == null)
                 yield break;
 
+            skipRequested = false;
+            IsAnimating = true;
             visualizer.Refresh(startingBoard);
 
-            foreach (SowingSegment segment in moveResult.SowingSegments)
-                yield return AnimateSowingSegment(segment);
+            for (int i = 0; i < moveResult.SowingSegments.Count; i++)
+            {
+                if (skipRequested) break;
 
+                segmentListener?.Invoke(moveResult.SowingSegments[i], i);
+
+                // One frame so a tip raised by that callback can freeze the board (timeScale 0)
+                // before any stone leaves its pit. Frame-based, so it still ticks while frozen.
+                yield return null;
+
+                yield return AnimateSowingSegment(moveResult.SowingSegments[i]);
+            }
+
+            IsAnimating = false;
+            skipRequested = false;
+
+            // Rebuilds every pit from the final board, which also cleans up whatever was left
+            // mid-flight when the move was skipped.
             visualizer.Refresh(moveResult.Board);
         }
 
@@ -112,6 +170,8 @@ namespace NsoloGame.Unity
             int movingCount = Mathf.Min(pickedStones.Count, segment.Landings.Count);
             for (int i = 0; i < movingCount; i++)
             {
+                if (skipRequested) break;
+
                 GameObject stone = pickedStones[i];
                 if (stone == null)
                     continue;
@@ -156,6 +216,13 @@ namespace NsoloGame.Unity
 
             while (elapsed < duration)
             {
+                // Refresh() destroys every stone when a move is skipped or restarted, and some of
+                // these coroutines are fire-and-forget, so the transform can vanish mid-flight.
+                if (stone == null)
+                    yield break;
+                if (skipRequested)
+                    break;
+
                 float t = elapsed / duration;
                 float eased = Mathf.SmoothStep(0f, 1f, t);
                 Vector3 position = Vector3.Lerp(start, end, eased);
@@ -167,7 +234,8 @@ namespace NsoloGame.Unity
                 yield return null;
             }
 
-            stone.position = end;
+            if (stone != null)
+                stone.position = end;
         }
 
         /// <summary>
