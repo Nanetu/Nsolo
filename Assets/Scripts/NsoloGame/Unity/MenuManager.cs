@@ -9,10 +9,23 @@ namespace NsoloGame.Unity
         [Header("Panels")]
         [SerializeField] private GameObject welcomePanel;
         [SerializeField] private GameObject tutorialPanel;
+        [Tooltip("Play opens this: vs Computer / vs Human. It sits between the welcome screen and " +
+                 "the difficulty panel, which is now only reached through the vs Computer button.")]
+        [SerializeField] private GameObject modePanel;
         [SerializeField] private GameObject difficultyPanel;
         [SerializeField] private GameObject profilePanel;
         [SerializeField] private GameObject pausePanel;
         [SerializeField] private GameObject gameOverPanel;
+
+        [Header("Gameplay Chrome")]
+        [Tooltip("Background art used against the AI — the one with the Undo pill painted on it.")]
+        [SerializeField] private GameObject aiBackgroundPanel;
+        [Tooltip("Background art used in local two-player, without the Undo pill.")]
+        [SerializeField] private GameObject humanBackgroundPanel;
+        [Tooltip("The Undo button object in HUDRoot. Its image is transparent and the pill it sits " +
+                 "on belongs to the AI background art, so it has to be switched off alongside it — " +
+                 "otherwise two-player play has a live invisible button over bare background.")]
+        [SerializeField] private GameObject undoButtonObject;
 
         [Header("Game")]
         [SerializeField] private GameController gameController;
@@ -21,6 +34,15 @@ namespace NsoloGame.Unity
         [Header("Welcome")]
         [Tooltip("Greeting on the welcome screen. Refreshed from the saved profile each time it opens.")]
         [SerializeField] private TMP_Text welcomeUsernameText;
+
+        [Header("Mode Selection")]
+        [Tooltip("Selected-state overlay on the vs Computer card.")]
+        [SerializeField] private GameObject vsComputerSelectionHighlight;
+        [Tooltip("Selected-state overlay on the vs Human card.")]
+        [SerializeField] private GameObject vsHumanSelectionHighlight;
+        [Tooltip("The mode panel's CONTINUE button. Held disabled until a card is picked, exactly " +
+                 "as the difficulty panel holds its own start button.")]
+        [SerializeField] private Button modeContinueButton;
 
         [Header("Difficulty Selection")]
         [SerializeField] private GameObject easySelectionHighlight;
@@ -56,9 +78,13 @@ namespace NsoloGame.Unity
         // Fired whenever the SFX slider changes so PitStoneVisualizer can update its volume
         public static event System.Action<float> SFXVolumeChanged;
 
+        private const int ModeVsComputer = 0;
+        private const int ModeVsHuman = 1;
+
         private bool isPaused;
         private bool subscribedToGameOver;
         private int selectedDifficulty = -1;
+        private int selectedMode = -1;
 
         private void Awake()
         {
@@ -96,6 +122,8 @@ namespace NsoloGame.Unity
             // Dropped before the timescale is reset: a tip left on screen would otherwise restore
             // whatever scale it captured and freeze the menu behind it.
             TutorialCoach.Instance?.ForceHide();
+            // Leaving mid-handover would otherwise strand the card on screen with the clock frozen.
+            PassDeviceModal.Instance?.ForceHide();
             Time.timeScale = 1f;
             isPaused = false;
             ResolveGameController();
@@ -103,6 +131,8 @@ namespace NsoloGame.Unity
             SetGameplayVisible(false);
             RefreshWelcomeUsername();
             ShowOnly(welcomePanel);
+            // Back to the standard chrome, so the menu is never sitting on two-player art.
+            ApplyGameplayChrome(GameMode.VersusComputer);
             AudioManager.StartMenuMusic();
         }
 
@@ -138,6 +168,59 @@ namespace NsoloGame.Unity
 #else
             Application.Quit();
 #endif
+        }
+
+        // ── Mode Panel ────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Wire the welcome screen's Play button here. It used to go straight to the difficulty
+        /// panel, which is now one step further in behind "vs Computer".
+        /// </summary>
+        public void ShowMode()
+        {
+            SetGameplayVisible(false);
+            ShowOnly(modePanel);
+            ResetModeSelection();
+        }
+
+        /// <summary>Mode panel: the vs Computer card. Selects, it does not navigate.</summary>
+        public void SelectVsComputer() => ApplyModeSelection(ModeVsComputer);
+
+        /// <summary>Mode panel: the vs Human card.</summary>
+        public void SelectVsHuman() => ApplyModeSelection(ModeVsHuman);
+
+        /// <summary>
+        /// Mode panel: CONTINUE. vs Computer goes on to pick a difficulty; vs Human has no
+        /// difficulty to pick, so it starts the game directly.
+        /// </summary>
+        public void ContinueFromMode()
+        {
+            switch (selectedMode)
+            {
+                case ModeVsComputer: ShowDifficulty(); break;
+                case ModeVsHuman: StartHotSeatGame(); break;
+                // Nothing picked. The button is held non-interactable until something is, so this
+                // is only reachable if that slot was never wired up.
+                default: return;
+            }
+        }
+
+        private void ApplyModeSelection(int selection)
+        {
+            selectedMode = selection;
+            SetActive(vsComputerSelectionHighlight, selection == ModeVsComputer);
+            SetActive(vsHumanSelectionHighlight,    selection == ModeVsHuman);
+            if (modeContinueButton != null) modeContinueButton.interactable = true;
+            AudioManager.Click();
+            Haptics.Light();
+        }
+
+        private void ResetModeSelection()
+        {
+            selectedMode = -1;
+            SetActive(vsComputerSelectionHighlight, false);
+            SetActive(vsHumanSelectionHighlight,    false);
+            if (modeContinueButton != null) modeContinueButton.interactable = false;
         }
 
         // ── Difficulty Panel ──────────────────────────────────────────────
@@ -189,6 +272,7 @@ namespace NsoloGame.Unity
             ResolveGameController();
             SubscribeToGameOver();
             HideAllPanels();
+            ApplyGameplayChrome(GameMode.VersusComputer);
 
             if (gameController == null)
             {
@@ -197,6 +281,39 @@ namespace NsoloGame.Unity
             }
 
             gameController.StartNewGame(difficulty);
+        }
+
+        /// <summary>Starts a local two-player game on the human background, with no Undo.</summary>
+        public void StartHotSeatGame()
+        {
+            Time.timeScale = 1f;
+            isPaused = false;
+            SetGameplayVisible(true);
+            ResolveGameController();
+            SubscribeToGameOver();
+            HideAllPanels();
+            ApplyGameplayChrome(GameMode.VersusHuman);
+
+            if (gameController == null)
+            {
+                Debug.LogError("MenuManager: GameController not assigned.");
+                return;
+            }
+
+            gameController.StartNewHotSeatGame();
+        }
+
+        /// <summary>
+        /// Swaps the background art for the mode being played, and takes the Undo button with it.
+        /// Safe to call with nothing assigned, which is the state until the human panel is built.
+        /// </summary>
+        private void ApplyGameplayChrome(GameMode mode)
+        {
+            bool human = mode == GameMode.VersusHuman;
+
+            SetActive(humanBackgroundPanel, human);
+            SetActive(aiBackgroundPanel, !human);
+            SetActive(undoButtonObject, !human);
         }
 
         /// <summary>
@@ -238,6 +355,16 @@ namespace NsoloGame.Unity
             SetPanelActive(pausePanel, false);
         }
 
+        /// <summary>
+        /// Replays the game that was just played — same mode, same difficulty — without going back
+        /// through the menus. Wired to Restart on both the pause and the game-over panel.
+        ///
+        /// The game-over button used to open the difficulty panel instead, which is a vs-Computer
+        /// screen: finishing a two-player game and pressing Restart put the player in front of a
+        /// difficulty list they had no use for, two taps away from the two-player game they asked
+        /// for. GameController already holds the mode and difficulty, so replaying is a matter of
+        /// asking it to set the same game up again.
+        /// </summary>
         public void RestartGame()
         {
             TutorialCoach.Instance?.ForceHide();
@@ -245,7 +372,20 @@ namespace NsoloGame.Unity
             isPaused = false;
             HideAllPanels();
             SetGameplayVisible(true);
-            gameController?.RestartGame();
+            ResolveGameController();
+            SubscribeToGameOver();
+
+            if (gameController == null)
+            {
+                Debug.LogError("MenuManager: GameController not assigned.");
+                return;
+            }
+
+            // Restarting from the game-over panel can be the first thing to run after a mode
+            // change, so the background art and the Undo pill are re-applied rather than assumed
+            // to be left over from the game that just ended.
+            ApplyGameplayChrome(gameController.CurrentMode);
+            gameController.RestartGame();
         }
 
         public void MainMenu() => ShowWelcome();
@@ -389,9 +529,15 @@ namespace NsoloGame.Unity
             SetGameplayVisible(true);
 
             bool playerWon = winner == 1;
+            bool hotSeat = gameController != null &&
+                           gameController.CurrentMode == GameMode.VersusHuman;
 
+            // Neither side is "you" in a two-player game, so the result is stated by seat rather
+            // than as a victory or a defeat.
             if (gameOverTitleText != null)
-                gameOverTitleText.text = playerWon ? "VICTORY" : "DEFEAT";
+                gameOverTitleText.text = hotSeat
+                    ? $"PLAYER {winner} WINS"
+                    : (playerWon ? "VICTORY" : "DEFEAT");
             if (finalPlayerCapturedText != null)
                 finalPlayerCapturedText.text = playerCaptured.ToString();
             if (finalAiCapturedText != null)
@@ -399,9 +545,16 @@ namespace NsoloGame.Unity
 
             if (gameOverDifficultyText != null)
             {
-                int d = gameController != null ? gameController.CurrentDifficulty : -1;
-                gameOverDifficultyText.text =
-                    d >= 0 && d < DifficultyNames.Length ? DifficultyNames[d] : "--";
+                if (hotSeat)
+                {
+                    gameOverDifficultyText.text = "2 PLAYER";
+                }
+                else
+                {
+                    int d = gameController != null ? gameController.CurrentDifficulty : -1;
+                    gameOverDifficultyText.text =
+                        d >= 0 && d < DifficultyNames.Length ? DifficultyNames[d] : "--";
+                }
             }
 
             if (gameOverTimeText != null)
@@ -410,13 +563,21 @@ namespace NsoloGame.Unity
                 gameOverTimeText.text = $"{(int)(seconds / 60):00}:{(int)(seconds % 60):00}";
             }
 
+            // The lifetime victory count is a record of games against the AI. A two-player result
+            // was deliberately not filed into it, so showing it here would imply otherwise.
             if (gameOverVictoryCountText != null)
-                gameOverVictoryCountText.text = (ProfileManager.Instance?.GamesWon ?? 0).ToString();
+                gameOverVictoryCountText.text = hotSeat
+                    ? "--"
+                    : (ProfileManager.Instance?.GamesWon ?? 0).ToString();
 
             if (gameOverSummaryText != null)
-                gameOverSummaryText.text = playerWon
-                    ? $"You: {playerCaptured} - {aiCaptured}"
-                    : $"AI: {aiCaptured} - {playerCaptured}";
+                gameOverSummaryText.text = hotSeat
+                    ? $"P1: {playerCaptured} - P2: {aiCaptured}"
+                    // "OPP" rather than "Computer": this label is a 200px box at font 30 with
+                    // autosizing off, so the longer word wraps onto a second line and overflows it.
+                    : (playerWon
+                        ? $"You: {playerCaptured} - {aiCaptured}"
+                        : $"OPP: {aiCaptured} - {playerCaptured}");
 
             SetPanelActive(gameOverPanel, true);
         }
@@ -433,6 +594,7 @@ namespace NsoloGame.Unity
         {
             SetPanelActive(welcomePanel,    false);
             SetPanelActive(tutorialPanel,   false);
+            SetPanelActive(modePanel,       false);
             SetPanelActive(difficultyPanel, false);
             SetPanelActive(profilePanel,    false);
             SetPanelActive(pausePanel,      false);
