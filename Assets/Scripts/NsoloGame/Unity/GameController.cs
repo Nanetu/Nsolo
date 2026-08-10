@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Threading;
 using NsoloGame.Core;
 using NsoloGame.AI;
+using NsoloGame.Players;
 
 namespace NsoloGame.Unity
 {
@@ -16,7 +17,21 @@ namespace NsoloGame.Unity
         ValidatingMove,
         ApplyingMove,
         AiThinking,
+        /// <summary>Hot-seat: waiting for whichever player is currently holding the device.</summary>
+        HotSeatTurn,
+        /// <summary>Hot-seat: handover card is up, or the board is turning round. Input is dead.</summary>
+        HotSeatHandover,
         GameOver
+    }
+
+    /// <summary>
+    /// Who the two seats belong to. VersusComputer is the original single-player game and its code
+    /// path is untouched by hot-seat; VersusHuman runs the agent-driven loop further down.
+    /// </summary>
+    public enum GameMode
+    {
+        VersusComputer,
+        VersusHuman
     }
 
     public class GameController : MonoBehaviour
@@ -35,6 +50,37 @@ namespace NsoloGame.Unity
         private int humanPlayer = 1;
         private int aiPlayer = 2;
         private Difficulty aiDifficulty;
+
+        // ── Hot-seat (local two-player) ──────────────────────────────────────
+        // Everything below is inert in VersusComputer mode.
+
+        [Header("Hot-seat")]
+        [Tooltip("Turns the board round between hot-seat turns. Auto-found if left empty.")]
+        [SerializeField] private BoardFlipper boardFlipper;
+
+        private GameMode mode = GameMode.VersusComputer;
+
+        /// <summary>
+        /// The two seats, indexed by player number so [1] and [2] are the players and [0] is
+        /// unused. Typed as the interface rather than as LocalHumanAgent on purpose: the loop below
+        /// works with whatever is sitting in a seat, so putting an <see cref="AIPlayerAgent"/> or a
+        /// future network agent in one is an assignment, not a rewrite.
+        /// </summary>
+        private readonly IPlayerAgent[] hotSeatAgents = new IPlayerAgent[3];
+
+        private int hotSeatCurrentPlayer = 1;
+        private Task<Move> hotSeatMoveTask;
+        private CancellationTokenSource hotSeatMoveCancellation;
+
+        /// <summary>Which player is laying out their stones during the shared formation phase.</summary>
+        private int arrangingPlayer = 1;
+
+        /// <summary>
+        /// Set by the first press of FORFEIT and cleared by anything else. The button sits exactly
+        /// where HINT does in single-player, so a single tap ending the game outright is a mis-tap
+        /// waiting to happen — the second press is what actually concedes.
+        /// </summary>
+        private bool forfeitArmed;
 
         private Move pendingMove;
 
@@ -74,13 +120,16 @@ namespace NsoloGame.Unity
         private int formationHeldFromCol;
         private System.Random formationRandom = new System.Random();
 
-        // The bottom pill is one button wearing two hats — see OnActionButtonPressed.
+        // The bottom pill is one button wearing two hats in single-player and a third in hot-seat
+        // — see OnActionButtonPressed.
         private const string ActionLabelStart = "START";
         private const string ActionLabelHint = "HINT";
+        private const string ActionLabelForfeit = "FORFEIT";
 
         public event System.Action<int, int, int> GameOver;
         public GameState CurrentState => gameState;
         public int CurrentDifficulty => (int)aiDifficulty;
+        public GameMode CurrentMode => mode;
 
         /// <summary>
         /// Wall-clock length of the game that just finished. Captured once in FinishGame so the
@@ -134,8 +183,25 @@ namespace NsoloGame.Unity
         public void StartNewGame(int difficultyInt)
         {
             Log($"StartNewGame({difficultyInt})");
+            mode = GameMode.VersusComputer;
             InitializeSystems();
             SetAIDifficulty(difficultyInt);
+            InitializeGame();
+        }
+
+        /// <summary>
+        /// Entry point for local two-player. No difficulty is chosen because no AI plays — the menu
+        /// goes straight from the mode panel into the game.
+        /// </summary>
+        public void StartNewHotSeatGame()
+        {
+            Log("StartNewHotSeatGame()");
+            mode = GameMode.VersusHuman;
+            InitializeSystems();
+
+            hotSeatAgents[1] = new LocalHumanAgent("Player 1");
+            hotSeatAgents[2] = new LocalHumanAgent("Player 2");
+
             InitializeGame();
         }
 
@@ -144,13 +210,23 @@ namespace NsoloGame.Unity
             Log("InitializeGame()");
             CancelAiThinking();
             CancelHintSearch();
+            CancelHotSeatTurn();
             StopAllCoroutines();
+            PassDeviceModal.Instance?.ForceHide();
             boardHistory.Clear();
             isPaused = false;
+            forfeitArmed = false;
             gameBoard = new GameBoard();
-            gameBoard.CurrentPlayer = GetStartingPlayerForDifficulty(aiDifficulty);
             gameStartTime = Time.time;
             formationHeld = 0;
+
+            bool hotSeat = mode == GameMode.VersusHuman;
+
+            // Hot-seat always opens with player 1, whose seat is also the camera's home position.
+            // The AI game keeps its "loser of the last game starts" rule.
+            gameBoard.CurrentPlayer = hotSeat ? 1 : GetStartingPlayerForDifficulty(aiDifficulty);
+            hotSeatCurrentPlayer = gameBoard.CurrentPlayer;
+            arrangingPlayer = 1;
 
             if (uiManager == null)
             {
@@ -158,11 +234,32 @@ namespace NsoloGame.Unity
                 return;
             }
 
-            GenerateAIFormation();
+            // Unconditional, and before either branch: the camera is shared by both modes, so a
+            // two-player game abandoned on player 2's side would otherwise hand its upside-down
+            // view to the next game against the computer. Snapping rather than animating because
+            // there is nothing to narrate — this is a board being set up, not a device changing
+            // hands — and it also puts right a flip left half-played by the StopAllCoroutines above.
+            ResolveBoardFlipper();
+            boardFlipper?.ResetToBase();
+
+            if (hotSeat)
+            {
+                // Both players lay out their own stones, so neither side is generated.
+                //
+                // Seats are filled here rather than only in StartNewHotSeatGame because a restart
+                // re-enters through this method alone: without it, replaying a two-player game
+                // would find empty chairs if the agents were ever cleared.
+                if (hotSeatAgents[1] == null) hotSeatAgents[1] = new LocalHumanAgent("Player 1");
+                if (hotSeatAgents[2] == null) hotSeatAgents[2] = new LocalHumanAgent("Player 2");
+            }
+            else
+            {
+                GenerateAIFormation();
+            }
 
             gameState = GameState.PreGameFormation;
             uiManager.UpdateDisplay(gameBoard);
-            uiManager.ShowStatus("Arrange");
+            uiManager.ShowStatus(hotSeat ? "Player 1: Arrange" : "Arrange");
             uiManager.ResetGameTimer();
             uiManager.ClearLastMove();
             uiManager.SetUndoInteractable(false);
@@ -184,9 +281,20 @@ namespace NsoloGame.Unity
         public void OnActionButtonPressed()
         {
             if (gameState == GameState.PreGameFormation)
+            {
                 ConfirmFormationReady();
-            else
-                RequestHint();
+                return;
+            }
+
+            // Same pill, third job: there is no AI to ask for a hint in a two-player game, so the
+            // button concedes instead.
+            if (mode == GameMode.VersusHuman)
+            {
+                RequestForfeit();
+                return;
+            }
+
+            RequestHint();
         }
 
         /// <summary>
@@ -196,6 +304,19 @@ namespace NsoloGame.Unity
         private void RefreshActionButton()
         {
             bool arranging = gameState == GameState.PreGameFormation;
+
+            if (mode == GameMode.VersusHuman)
+            {
+                string label = arranging
+                    ? ActionLabelStart
+                    : (forfeitArmed ? "CONFIRM?" : ActionLabelForfeit);
+
+                uiManager?.SetActionButton(
+                    label,
+                    arranging || gameState == GameState.HotSeatTurn);
+                return;
+            }
+
             uiManager?.SetActionButton(
                 arranging ? ActionLabelStart : ActionLabelHint,
                 arranging || gameState == GameState.HumanTurn);
@@ -231,7 +352,7 @@ namespace NsoloGame.Unity
         public void OnFormationPitTouched(int row, int col)
         {
             if (gameState != GameState.PreGameFormation) return;
-            if (!IsHumanRow(row)) return;
+            if (!IsRowOwnedByActivePlayer(row)) return;
 
             if (formationHeld == 0)
             {
@@ -258,6 +379,12 @@ namespace NsoloGame.Unity
             if (formationHeld != 0)
             {
                 uiManager.ShowLastMove($"Place your remaining {formationHeld} stones first");
+                return;
+            }
+
+            if (mode == GameMode.VersusHuman)
+            {
+                ConfirmHotSeatFormation();
                 return;
             }
 
@@ -292,7 +419,26 @@ namespace NsoloGame.Unity
 
         private bool IsHumanRow(int row)
         {
-            return humanPlayer == 1 ? (row == 0 || row == 1) : (row == 2 || row == 3);
+            return OwnsRow(humanPlayer, row);
+        }
+
+        /// <summary>Player 1 owns the bottom two rows, player 2 the top two.</summary>
+        private static bool OwnsRow(int player, int row)
+        {
+            return player == 1 ? (row == 0 || row == 1) : (row == 2 || row == 3);
+        }
+
+        /// <summary>
+        /// Whether the row belongs to whoever the board is currently waiting on. In single-player
+        /// that is always the human; in hot-seat it follows the seat that is holding the device,
+        /// which is what makes the same tap handler work for both players.
+        /// </summary>
+        private bool IsRowOwnedByActivePlayer(int row)
+        {
+            if (mode != GameMode.VersusHuman) return IsHumanRow(row);
+
+            int active = gameState == GameState.PreGameFormation ? arrangingPlayer : hotSeatCurrentPlayer;
+            return OwnsRow(active, row);
         }
 
         private int GetStartingPlayerForDifficulty(Difficulty difficulty)
@@ -306,6 +452,9 @@ namespace NsoloGame.Unity
             if (gameState == GameState.AiThinking)
                 HandleAiThinkingState();
 
+            if (gameState == GameState.HotSeatTurn)
+                HandleHotSeatMoveResult();
+
             HandleHintResult();
         }
 
@@ -317,12 +466,22 @@ namespace NsoloGame.Unity
             // A modal tip is waiting on its Got It button — the board stays inert until it goes.
             if (TutorialCoach.Instance != null && TutorialCoach.Instance.IsBlocking) return;
 
+            // Hot-seat: dead while the handover card is up and while the board is turning round, so
+            // a tap meant for the card cannot fall through and select a pit the incoming player has
+            // not properly seen yet.
+            if (gameState == GameState.HotSeatHandover) return;
+            if (PassDeviceModal.Instance != null && PassDeviceModal.Instance.IsBlocking) return;
+            if (boardFlipper != null && boardFlipper.IsFlipping) return;
+
             // Reaching across to the far side is the classic first-timer mistake, so it earns an
             // explanation rather than silence — while arranging and during play alike.
-            if (!IsHumanRow(row) &&
-                (gameState == GameState.PreGameFormation || gameState == GameState.HumanTurn))
+            if (!IsRowOwnedByActivePlayer(row) &&
+                (gameState == GameState.PreGameFormation || gameState == GameState.HumanTurn ||
+                 gameState == GameState.HotSeatTurn))
             {
-                uiManager.ShowLastMove("Those rows belong to your opponent");
+                uiManager.ShowLastMove(mode == GameMode.VersusHuman
+                    ? "Those rows belong to the other player"
+                    : "Those rows belong to your opponent");
                 TutorialCoach.Show(TutorialTip.OpponentRows);
                 Haptics.Light();
                 return;
@@ -331,6 +490,12 @@ namespace NsoloGame.Unity
             if (gameState == GameState.PreGameFormation)
             {
                 OnFormationPitTouched(row, col);
+                return;
+            }
+
+            if (gameState == GameState.HotSeatTurn)
+            {
+                SubmitHotSeatMove(row, col);
                 return;
             }
 
@@ -439,10 +604,10 @@ namespace NsoloGame.Unity
             GameBoard startingBoard = gameBoard.Clone();
             MoveResult moveResult = ApplyMoveWithLandingTrace(move, aiPlayer);
             currentMoveSegmentCount = moveResult.SowingSegments?.Count ?? 0;
-            uiManager.ShowStatus("AI sowing");
+            uiManager.ShowStatus("Computer sowing");
             yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
             gameBoard = moveResult.Board;
-            ShowMoveFeedback(moveResult, "AI");
+            ShowMoveFeedback(moveResult, "Computer");
 
             if (TryEndGameAfterMove(aiPlayer, humanPlayer)) yield break;
 
@@ -456,6 +621,253 @@ namespace NsoloGame.Unity
             RefreshActionButton();
             List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
             uiManager.HighlightLegalMoves(legalMoves);
+        }
+
+        // ── Hot-seat (local two-player) ──────────────────────────────────
+        //
+        // The path above hardcodes "human moves, then the AI replies" — two methods that each name
+        // the other as their successor. This one holds no such assumption: it asks whichever agent
+        // owns the current seat for a move, plays it, hands the device over, and asks the other. It
+        // never learns which kind of agent answered, which is the point. Putting a network agent in
+        // one of the two seats is the only change an online mode would need here.
+
+        private void ConfirmHotSeatFormation()
+        {
+            AudioManager.Click();
+            Haptics.Light();
+
+            formationHeld = 0;
+            gameState = GameState.HotSeatHandover;
+            RefreshActionButton();
+
+            if (arrangingPlayer == 1)
+            {
+                // Player 1 is happy with their side; the device goes across so player 2 can lay
+                // out their own rather than inheriting a randomised one.
+                StartCoroutine(HandOverToPlayer(2, resumeFormation: true));
+                return;
+            }
+
+            // Both sides are set, so this is where the game actually begins — the clock and the
+            // music start here, exactly as they do when the single-player formation is committed.
+            uiManager.StartTurnTimer();
+            AudioManager.StartGameMusic();
+
+            StartCoroutine(HandOverToPlayer(1, resumeFormation: false));
+        }
+
+        /// <summary>
+        /// Shows the handover card, turns the board round, and then gives the incoming player
+        /// either the formation phase or their turn.
+        /// </summary>
+        private IEnumerator HandOverToPlayer(int player, bool resumeFormation)
+        {
+            gameState = GameState.HotSeatHandover;
+            uiManager.ClearHighlights();
+            uiManager.SetUndoInteractable(false);
+            uiManager.ShowStatus("Pass the device");
+
+            string name = NameOf(player);
+
+            // Card first, then the rotation: the incoming player takes the phone while it still
+            // shows a static board, and watches their own rows swing into place.
+            if (PassDeviceModal.Instance != null)
+                yield return PassDeviceModal.Instance.ShowAndWait(name);
+
+            ResolveBoardFlipper();
+            if (boardFlipper != null)
+                yield return boardFlipper.Flip();
+
+            // Pit counts are screen-space labels placed from WorldToScreenPoint, so they are still
+            // sitting where the old camera put them until the board is redrawn.
+            uiManager.UpdateDisplay(gameBoard);
+
+            if (resumeFormation)
+            {
+                arrangingPlayer = player;
+                gameState = GameState.PreGameFormation;
+                uiManager.ShowStatus($"{name}: Arrange");
+                uiManager.ShowLastMove("Arrange your stones, then press START");
+                RefreshActionButton();
+                TutorialCoach.Show(TutorialTip.ArrangeStones);
+                yield break;
+            }
+
+            BeginHotSeatTurn(player);
+        }
+
+        private void BeginHotSeatTurn(int player)
+        {
+            hotSeatCurrentPlayer = player;
+            gameBoard.CurrentPlayer = player;
+            forfeitArmed = false;
+            gameState = GameState.HotSeatTurn;
+
+            IPlayerAgent agent = hotSeatAgents[player];
+            uiManager.ShowStatus($"{NameOf(player)}'s turn");
+            uiManager.StartTurnTimer();
+            RefreshActionButton();
+
+            // Only an agent that plays by tapping gets the board lit up for it. An agent that
+            // thinks for itself — the AI today, a remote player later — leaves the board plain.
+            if (agent != null && agent.RequiresBoardInput)
+            {
+                uiManager.HighlightLegalMoves(gameEngine.GetLegalMoves(gameBoard, player));
+                uiManager.ShowLastMove("Select one of your highlighted pits");
+            }
+
+            RequestHotSeatMove(player);
+        }
+
+        private void RequestHotSeatMove(int player)
+        {
+            CancelHotSeatTurn();
+
+            IPlayerAgent agent = hotSeatAgents[player];
+            if (agent == null)
+            {
+                Debug.LogError($"GameController: no agent seated for player {player}.");
+                return;
+            }
+
+            hotSeatMoveCancellation = new CancellationTokenSource();
+            hotSeatMoveTask = agent.RequestMove(
+                gameBoard.Clone(), player, hotSeatMoveCancellation.Token);
+        }
+
+        /// <summary>
+        /// Feeds a tap to the current seat's agent. Legality is settled here, before the agent sees
+        /// it, which is the same order single-player uses — the agent's job is to name a move, not
+        /// to know the rules.
+        /// </summary>
+        private void SubmitHotSeatMove(int row, int col)
+        {
+            // Only an agent that takes board input can be answered by a tap. Anything else in the
+            // seat resolves its own move and this is simply not the way it arrives.
+            LocalHumanAgent agent = hotSeatAgents[hotSeatCurrentPlayer] as LocalHumanAgent;
+            if (agent == null || !agent.IsAwaitingInput) return;
+
+            if (forfeitArmed)
+            {
+                forfeitArmed = false;
+                RefreshActionButton();
+            }
+
+            Move selected = null;
+            foreach (Move m in gameEngine.GetLegalMoves(gameBoard, hotSeatCurrentPlayer))
+                if (m.Row == row && m.Col == col) { selected = m; break; }
+
+            if (selected == null)
+            {
+                uiManager.FlashIllegalMove(row, col);
+                AudioManager.Illegal();
+                Haptics.Light();
+                TutorialCoach.Show(TutorialTip.NeedTwoStones);
+                return;
+            }
+
+            agent.SubmitMove(selected);
+        }
+
+        private void HandleHotSeatMoveResult()
+        {
+            if (isPaused || hotSeatMoveTask == null || !hotSeatMoveTask.IsCompleted) return;
+            if (hotSeatMoveTask.IsCanceled || hotSeatMoveTask.IsFaulted)
+            {
+                hotSeatMoveTask = null;
+                return;
+            }
+
+            Move move = hotSeatMoveTask.Result;
+            hotSeatMoveTask = null;
+
+            if (move == null)
+            {
+                Debug.LogWarning($"GameController: player {hotSeatCurrentPlayer} produced no move.");
+                FinishGame(Opponent(hotSeatCurrentPlayer));
+                return;
+            }
+
+            gameState = GameState.ApplyingMove;
+            activeMoveRoutine = StartCoroutine(ApplyHotSeatMoveCoroutine(move, hotSeatCurrentPlayer));
+        }
+
+        private IEnumerator ApplyHotSeatMoveCoroutine(Move move, int player)
+        {
+            int opponent = Opponent(player);
+
+            // Both movers are people here, so captures are always worded as something a player did.
+            currentMoverIsHuman = true;
+
+            uiManager.ClearHighlights();
+
+            GameBoard startingBoard = gameBoard.Clone();
+            MoveResult moveResult = ApplyMoveWithLandingTrace(move, player);
+            currentMoveSegmentCount = moveResult.SowingSegments?.Count ?? 0;
+
+            uiManager.ShowStatus("Sowing");
+            RefreshActionButton();
+            yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
+            gameBoard = moveResult.Board;
+            ShowMoveFeedback(moveResult, NameOf(player));
+
+            activeMoveRoutine = null;
+
+            if (TryEndGameAfterMove(player, opponent)) yield break;
+
+            yield return HandOverToPlayer(opponent, resumeFormation: false);
+        }
+
+        /// <summary>
+        /// Conceding. The first press arms it and relabels the pill; the second actually resigns.
+        /// This button sits exactly where HINT does in single-player, and one stray tap ending the
+        /// game outright is too easy to do by accident — delete the armed branch for a single-press
+        /// forfeit.
+        /// </summary>
+        private void RequestForfeit()
+        {
+            if (gameState != GameState.HotSeatTurn) return;
+
+            if (!forfeitArmed)
+            {
+                forfeitArmed = true;
+                RefreshActionButton();
+                uiManager.ShowLastMove("Press again to concede this game");
+                Haptics.Light();
+                AudioManager.Click();
+                return;
+            }
+
+            forfeitArmed = false;
+            int conceding = hotSeatCurrentPlayer;
+
+            Log($"Forfeit by player {conceding}.");
+            CancelHotSeatTurn();
+            uiManager.ShowLastMove($"{NameOf(conceding)} forfeited");
+            FinishGame(Opponent(conceding));
+        }
+
+        private void CancelHotSeatTurn()
+        {
+            hotSeatMoveCancellation?.Cancel();
+            hotSeatMoveCancellation?.Dispose();
+            hotSeatMoveCancellation = null;
+            hotSeatMoveTask = null;
+
+            (hotSeatAgents[1] as LocalHumanAgent)?.Abandon();
+            (hotSeatAgents[2] as LocalHumanAgent)?.Abandon();
+        }
+
+        private string NameOf(int player)
+        {
+            return hotSeatAgents[player]?.DisplayName ?? $"Player {player}";
+        }
+
+        private static int Opponent(int player) => player == 1 ? 2 : 1;
+
+        private void ResolveBoardFlipper()
+        {
+            if (boardFlipper == null) boardFlipper = FindObjectOfType<BoardFlipper>();
         }
 
         // ── Undo ─────────────────────────────────────────────────────────
@@ -517,7 +929,9 @@ namespace NsoloGame.Unity
 
             uiManager.UpdateDisplay(gameBoard);
             uiManager.ShowStatus("Your turn");
-            uiManager.ShowLastMove(interruptedAi ? "Move undone — AI reply cancelled" : "Move undone");
+            uiManager.ShowLastMove(interruptedAi
+                ? "Move undone — computer's reply cancelled"
+                : "Move undone");
             uiManager.StartTurnTimer();
 
             List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
@@ -702,6 +1116,8 @@ namespace NsoloGame.Unity
             Log($"FinishGame(winner={winner})");
             CancelAiThinking();
             CancelHintSearch();
+            CancelHotSeatTurn();
+            forfeitArmed = false;
             gameState = GameState.GameOver;
             RefreshActionButton();
 
@@ -712,18 +1128,58 @@ namespace NsoloGame.Unity
             float elapsed = Time.time - gameStartTime;
             LastGameSeconds = elapsed;
             bool humanWon = winner == humanPlayer;
-            ProfileManager.Instance?.RecordGameResult((int)aiDifficulty, humanWon, elapsed);
+            bool hotSeat = mode == GameMode.VersusHuman;
+
+            // Hot-seat results are deliberately not recorded. The whole stats system is keyed by AI
+            // difficulty — win rate, per-difficulty records, the "loser starts next" rule — and
+            // filing two-player games under a difficulty nobody played would make those numbers
+            // mean nothing. Tracking them properly needs its own counters, which is future work.
+            if (!hotSeat)
+            {
+                ProfileManager.Instance?.RecordGameResult((int)aiDifficulty, humanWon, elapsed);
+            }
 
             AudioManager.Silence();
-            AudioManager.GameOver(humanWon);
+            // Somebody in the room won a hot-seat game, so it always gets the victory sting.
+            AudioManager.GameOver(hotSeat || humanWon);
             Haptics.Heavy();
 
-            int loser = winner == humanPlayer ? aiPlayer : humanPlayer;
-            PlayerPrefs.SetInt($"LastLoser_Diff{(int)aiDifficulty}", loser);
-            PlayerPrefs.Save();
+            if (!hotSeat)
+            {
+                int loser = winner == humanPlayer ? aiPlayer : humanPlayer;
+                PlayerPrefs.SetInt($"LastLoser_Diff{(int)aiDifficulty}", loser);
+                PlayerPrefs.Save();
+            }
 
-            uiManager?.ShowGameOver(winner);
+            // Started before the panel goes up so the turn is already under way behind it.
+            if (hotSeat) StartCoroutine(ReturnBoardToDefaultView());
+
+            uiManager?.ShowGameOver(winner, hotSeat);
             GameOver?.Invoke(winner, p1Stones, p2Stones);
+        }
+
+        /// <summary>
+        /// Turns the board back to player 1's side once a hot-seat game is decided.
+        ///
+        /// A handover leaves the camera on whichever seat played last, and the result panel is the
+        /// point at which the far side's view stops being useful — nobody is going to take another
+        /// turn from it. Doing it here rather than only when the next game starts means the board
+        /// is never left sitting upside down between games, whichever way the player leaves the
+        /// panel: restart, main menu, or straight into a game against the computer.
+        ///
+        /// It plays the same half turn a handover does rather than snapping, so the board reads as
+        /// being set back down between the two players rather than jumping orientation.
+        /// </summary>
+        private IEnumerator ReturnBoardToDefaultView()
+        {
+            ResolveBoardFlipper();
+            if (boardFlipper == null || !boardFlipper.IsFlipped) yield break;
+
+            yield return boardFlipper.Flip();
+
+            // Pit counts are screen-space labels placed with WorldToScreenPoint, so they are still
+            // where the old camera put them until the board is redrawn.
+            uiManager?.UpdateDisplay(gameBoard);
         }
 
         private void CancelAiThinking()

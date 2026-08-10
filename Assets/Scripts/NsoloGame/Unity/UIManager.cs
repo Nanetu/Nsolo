@@ -216,11 +216,23 @@ namespace NsoloGame.Unity
             StartCoroutine(FlashCoroutine(row, col, illegalMoveColor, 0.35f));
         }
 
-        public void ShowGameOver(int winner)
+        /// <summary>
+        /// Announces the result. In hot-seat both sides are people, so neither "you" nor "AI" is
+        /// the right word for either of them — the winner is named by seat instead.
+        /// </summary>
+        public void ShowGameOver(int winner, bool hotSeat = false)
         {
             ClearHighlights();
             StopTurnTimer();
-            ShowStatus(winner == 1 ? "You win!" : "AI wins!");
+
+            if (hotSeat)
+            {
+                ShowStatus($"Player {winner} wins!");
+                ShowLastMove($"Player {winner} wins!");
+                return;
+            }
+
+            ShowStatus(winner == 1 ? "You win!" : "Computer wins!");
             ShowLastMove(winner == 1 ? "Victory!" : "Defeated!");
         }
 

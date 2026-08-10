@@ -285,36 +285,36 @@ namespace NsoloGame.Unity
                 usernameText.text = profile.username;
 
             if (gamesPlayedText != null)
-                gamesPlayedText.text = $"[{profile.gamesPlayed}]";
+                gamesPlayedText.text = $"{profile.gamesPlayed}";
 
             if (gamesWonText != null)
-                gamesWonText.text = $"[{profile.gamesWon}]";
+                gamesWonText.text = $"{profile.gamesWon}";
 
             if (winRateText != null)
             {
                 float rate = profile.gamesPlayed > 0
                     ? (float)profile.gamesWon / profile.gamesPlayed * 100f
                     : 0f;
-                winRateText.text = $"[{Mathf.RoundToInt(rate)}%]";
+                winRateText.text = $"{Mathf.RoundToInt(rate)}%";
             }
 
             if (shortestWinText != null)
             {
                 if (profile.shortestWinSeconds >= float.MaxValue)
-                    shortestWinText.text = "[--:--]";
+                    shortestWinText.text = "--:--";
                 else
                 {
                     int m = (int)(profile.shortestWinSeconds / 60);
                     int s = (int)(profile.shortestWinSeconds % 60);
-                    shortestWinText.text = $"[{m:00}:{s:00}]";
+                    shortestWinText.text = $"{m:00}:{s:00}";
                 }
             }
 
             if (easyWinsText != null)
-                easyWinsText.text = $"[{profile.easyWins}]";
+                easyWinsText.text = $"{profile.easyWins}";
 
             if (hardWinsText != null)
-                hardWinsText.text = $"[{profile.hardWins}]";
+                hardWinsText.text = $"{profile.hardWins}";
 
             if (breakdownText != null)
                 breakdownText.text =

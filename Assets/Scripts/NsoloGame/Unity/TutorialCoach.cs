@@ -173,14 +173,14 @@ namespace NsoloGame.Unity
                 [TutorialTip.HintButton] = new TipDefinition
                 {
                     Title = "Hint",
-                    Body = "Asks the AI for the strongest move and flashes that pit. Try thinking it through first.",
+                    Body = "Asks the computer for the strongest move and flashes that pit. Try thinking it through first.",
                     Modal = true,
                     MaxShows = 1,
                 },
                 [TutorialTip.UndoButton] = new TipDefinition
                 {
                     Title = "Undo",
-                    Body = "Takes back your last move and the AI's reply. Only available on your turn.",
+                    Body = "Takes back your last move and the computer's reply. Only available on your turn.",
                     Modal = true,
                     MaxShows = 1,
                 },
@@ -208,7 +208,7 @@ namespace NsoloGame.Unity
                 [TutorialTip.CapturedByAi] = new TipDefinition
                 {
                     Title = "You Lost Stones",
-                    Body = "The AI captured from your side. Keep an eye on your inner row.",
+                    Body = "The computer captured from your side. Keep an eye on your inner row.",
                     Modal = false,
                     Seconds = 2.6f,
                     MaxShows = 1,
