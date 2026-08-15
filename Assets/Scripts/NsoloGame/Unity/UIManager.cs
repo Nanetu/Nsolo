@@ -26,6 +26,9 @@ namespace NsoloGame.Unity
         [Header("HUD — Scores")]
         [SerializeField] private TMP_Text playerScoreText;
         [SerializeField] private TMP_Text aiScoreText;
+        [Tooltip("Online only: the opponent's name on the line above the left-hand score box, where " +
+                 "the other backgrounds paint COMPUTER or PLAYER 1. Hidden in the local modes.")]
+        [SerializeField] private TMP_Text opponentNameText;
 
         [Header("HUD — Last Move")]
         [SerializeField] private TMP_Text lastMoveText;
@@ -236,6 +239,21 @@ namespace NsoloGame.Unity
             ShowLastMove(winner == 1 ? "Victory!" : "Defeated!");
         }
 
+        /// <summary>
+        /// Announces an online result. Separate from <see cref="ShowGameOver"/> because "you" is not
+        /// player 1 here — it is whichever seat this device is playing, which is player 2 for
+        /// whoever joined the room.
+        /// </summary>
+        public void ShowGameOverOnline(int winner, int localPlayer)
+        {
+            ClearHighlights();
+            StopTurnTimer();
+
+            bool won = winner == localPlayer;
+            ShowStatus(won ? "You win!" : "Opponent wins!");
+            ShowLastMove(won ? "Victory!" : "Defeated!");
+        }
+
         public void FlashHintPit(int row, int col)
         {
             if (stoneVisualizer != null)
@@ -350,6 +368,47 @@ namespace NsoloGame.Unity
         // Score is the total number of stones still sitting in each player's own pits
         // (not the captured/store count), so it starts at 32 and only drops when the
         // opponent captures from that player's side.
+        // Which seat each score box belongs to. The two boxes are fixed on screen — aiScoreText is
+        // the left-hand one and playerScoreText the right, whatever their names suggest — but the
+        // three backgrounds label them differently:
+        //
+        //   vs Computer    COMPUTER SCORE  |  YOUR SCORE      left = the AI,      right = you
+        //   local 2-player PLAYER 1 SCORE  |  PLAYER 2 SCORE  left = player 1,    right = player 2
+        //   online         SCORE           |  YOUR SCORE      left = the opponent, right = you
+        //
+        // Hard-wiring left to player 2 was right only for the first of those. In hot-seat it put
+        // player 2's total under a box captioned PLAYER 1, and online it would have done the same to
+        // whoever joined, since the joiner is player 2 and "yours" is on the right for both of them.
+        private int scoreLeftPlayer = 2;
+        private int scoreRightPlayer = 1;
+
+        /// <summary>
+        /// Says which seat each score box is captioned for. Called when a game starts, once the mode
+        /// — and online, the local seat — is known.
+        /// </summary>
+        public void SetScoreSides(int leftPlayer, int rightPlayer)
+        {
+            scoreLeftPlayer = leftPlayer;
+            scoreRightPlayer = rightPlayer;
+        }
+
+        /// <summary>
+        /// Names the opponent above the left-hand score box.
+        ///
+        /// Only online needs this. The other two backgrounds paint their own caption there —
+        /// "COMPUTER" and "PLAYER 1" — and the online one deliberately leaves that line blank
+        /// because the name is not known until there is somebody in the room. Passing null or an
+        /// empty name hides the label, so the local modes are unaffected.
+        /// </summary>
+        public void SetOpponentName(string opponentName)
+        {
+            if (opponentNameText == null) return;
+
+            bool show = !string.IsNullOrWhiteSpace(opponentName);
+            opponentNameText.gameObject.SetActive(show);
+            if (show) opponentNameText.text = opponentName.ToUpperInvariant();
+        }
+
         private void UpdateScores(GameBoard board)
         {
             if (board == null) return;
@@ -362,8 +421,10 @@ namespace NsoloGame.Unity
                 p2Stones += board.Get(2, c) + board.Get(3, c);
             }
 
-            if (playerScoreText != null) playerScoreText.text = p1Stones.ToString("00");
-            if (aiScoreText != null) aiScoreText.text = p2Stones.ToString("00");
+            int Stones(int player) => player == 1 ? p1Stones : p2Stones;
+
+            if (aiScoreText != null) aiScoreText.text = Stones(scoreLeftPlayer).ToString("00");
+            if (playerScoreText != null) playerScoreText.text = Stones(scoreRightPlayer).ToString("00");
         }
 
         private IEnumerator FlashCoroutine(int row, int col, Color color, float duration)

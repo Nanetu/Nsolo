@@ -9,6 +9,9 @@ namespace NsoloGame.Unity
         [Header("Panels")]
         [SerializeField] private GameObject welcomePanel;
         [SerializeField] private GameObject tutorialPanel;
+        [Tooltip("The tutorial's START button. Hidden when the rules are opened from the pause menu, " +
+                 "where 'start playing' would mean abandoning the game already in progress.")]
+        [SerializeField] private GameObject tutorialStartButton;
         [Tooltip("Play opens this: vs Computer / vs Human. It sits between the welcome screen and " +
                  "the difficulty panel, which is now only reached through the vs Computer button.")]
         [SerializeField] private GameObject modePanel;
@@ -22,6 +25,8 @@ namespace NsoloGame.Unity
         [SerializeField] private GameObject aiBackgroundPanel;
         [Tooltip("Background art used in local two-player, without the Undo pill.")]
         [SerializeField] private GameObject humanBackgroundPanel;
+        [Tooltip("Background art used online. Falls back to the local two-player art if left empty.")]
+        [SerializeField] private GameObject onlineBackgroundPanel;
         [Tooltip("The Undo button object in HUDRoot. Its image is transparent and the pill it sits " +
                  "on belongs to the AI background art, so it has to be switched off alongside it — " +
                  "otherwise two-player play has a live invisible button over bare background.")]
@@ -30,6 +35,8 @@ namespace NsoloGame.Unity
         [Header("Game")]
         [SerializeField] private GameController gameController;
         [SerializeField] private GameObject gameplayRoot;
+        [Tooltip("Owns the online room flow. Auto-found if left empty.")]
+        [SerializeField] private OnlineFlowController onlineFlow;
 
         [Header("Welcome")]
         [Tooltip("Greeting on the welcome screen. Refreshed from the saved profile each time it opens.")]
@@ -83,6 +90,9 @@ namespace NsoloGame.Unity
 
         private bool isPaused;
         private bool subscribedToGameOver;
+
+        /// <summary>Whether the tutorial was opened over a game, and so has a game to go back to.</summary>
+        private bool tutorialOpenedFromPause;
         private int selectedDifficulty = -1;
         private int selectedMode = -1;
 
@@ -124,6 +134,12 @@ namespace NsoloGame.Unity
             TutorialCoach.Instance?.ForceHide();
             // Leaving mid-handover would otherwise strand the card on screen with the clock frozen.
             PassDeviceModal.Instance?.ForceHide();
+
+            // Leaving an online game has to actually leave the room, or the opponent is left staring
+            // at a board waiting for a move from somebody who has gone back to the menu.
+            ResolveOnlineFlow();
+            onlineFlow?.CloseAndCleanup();
+
             Time.timeScale = 1f;
             isPaused = false;
             ResolveGameController();
@@ -146,8 +162,52 @@ namespace NsoloGame.Unity
 
         public void ShowTutorial()
         {
+            tutorialOpenedFromPause = false;
+            SetActive(tutorialStartButton, true);
             SetGameplayVisible(false);
             ShowOnly(tutorialPanel);
+        }
+
+        /// <summary>
+        /// Opens the rules from the pause menu, over the game rather than instead of it.
+        ///
+        /// <see cref="ShowTutorial"/> cannot be used here. It hides the gameplay root and calls
+        /// ShowOnly, which takes the pause panel down with everything else, and the tutorial's Back
+        /// button goes to the welcome screen — so a player who tapped it mid-game would lose that
+        /// game without ever being asked. This keeps the board loaded and the clock frozen
+        /// underneath, and remembers where to go back to.
+        /// </summary>
+        public void ShowTutorialFromPause()
+        {
+            tutorialOpenedFromPause = true;
+
+            // START sends the player to the mode panel to begin a game. Offered to somebody who is
+            // already in one, it is a second way to lose it by accident — so it is not offered.
+            SetActive(tutorialStartButton, false);
+
+            SetPanelActive(pausePanel, false);
+            SetPanelActive(tutorialPanel, true);
+            AudioManager.Click();
+            Haptics.Light();
+        }
+
+        /// <summary>
+        /// Leaves the tutorial for wherever it was opened from. Wire `TutorialPanel/Back` to this
+        /// rather than to BackToWelcome — from the main menu it behaves exactly as it always did.
+        /// </summary>
+        public void CloseTutorial()
+        {
+            SetPanelActive(tutorialPanel, false);
+
+            if (tutorialOpenedFromPause)
+            {
+                tutorialOpenedFromPause = false;
+                SetActive(tutorialStartButton, true);
+                SetPanelActive(pausePanel, true);
+                return;
+            }
+
+            ShowWelcome();
         }
 
         public void ShowProfile()
@@ -221,6 +281,70 @@ namespace NsoloGame.Unity
             SetActive(vsComputerSelectionHighlight, false);
             SetActive(vsHumanSelectionHighlight,    false);
             if (modeContinueButton != null) modeContinueButton.interactable = false;
+        }
+
+        // ── Online ────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Opens the Create Room / Join Room screen. Wired straight to the welcome screen's Play
+        /// Online button.
+        ///
+        /// Online deliberately does not sit behind the mode panel with the other two. That panel
+        /// exists to pick who you are playing and then commit — a shape that fits vs Computer and
+        /// vs Human because both start a game the moment you confirm. Online cannot: there is no
+        /// game until a room exists and somebody else is in it, so it goes to a screen of its own
+        /// rather than pretending to be a third card in a chooser it does not behave like.
+        /// </summary>
+        public void ShowOnline()
+        {
+            SetGameplayVisible(false);
+            ResolveOnlineFlow();
+
+            if (onlineFlow == null)
+            {
+                Debug.LogError("MenuManager: no OnlineFlowController in the scene.");
+                return;
+            }
+
+            onlineFlow.ShowOnlinePanel();
+        }
+
+        /// <summary>
+        /// Called by <see cref="OnlineFlowController"/> once a room is full and a match exists.
+        /// The match is handed straight to the game — the menu does not keep a reference to it.
+        /// </summary>
+        public void StartOnlineGame(NsoloGame.Net.NetworkMatch match)
+        {
+            Time.timeScale = 1f;
+            isPaused = false;
+            SetGameplayVisible(true);
+            ResolveGameController();
+            SubscribeToGameOver();
+            HideAllPanels();
+            ApplyGameplayChrome(GameMode.Online);
+
+            if (gameController == null)
+            {
+                Debug.LogError("MenuManager: GameController not assigned.");
+                return;
+            }
+
+            gameController.StartNewOnlineGame(match);
+        }
+
+        /// <summary>
+        /// Clears the menu panels without touching the online screens, which
+        /// <see cref="OnlineFlowController"/> owns and toggles itself.
+        /// </summary>
+        public void HideAllPanelsForOnline()
+        {
+            HideAllPanels();
+            SetGameplayVisible(false);
+        }
+
+        private void ResolveOnlineFlow()
+        {
+            if (onlineFlow == null) onlineFlow = FindObjectOfType<OnlineFlowController>();
         }
 
         // ── Difficulty Panel ──────────────────────────────────────────────
@@ -309,11 +433,17 @@ namespace NsoloGame.Unity
         /// </summary>
         private void ApplyGameplayChrome(GameMode mode)
         {
-            bool human = mode == GameMode.VersusHuman;
+            // Neither two-player mode has an Undo — taking a move back is not something you can do
+            // to an opponent who has already seen it — but they do not share a background: online
+            // has its own art, and falls back to the local one only if that slot is empty.
+            bool online = mode == GameMode.Online;
+            bool twoPlayer = mode != GameMode.VersusComputer;
+            bool useOnlineArt = online && onlineBackgroundPanel != null;
 
-            SetActive(humanBackgroundPanel, human);
-            SetActive(aiBackgroundPanel, !human);
-            SetActive(undoButtonObject, !human);
+            SetActive(onlineBackgroundPanel, useOnlineArt);
+            SetActive(humanBackgroundPanel, twoPlayer && !useOnlineArt);
+            SetActive(aiBackgroundPanel, !twoPlayer);
+            SetActive(undoButtonObject, !twoPlayer);
         }
 
         /// <summary>
@@ -332,7 +462,15 @@ namespace NsoloGame.Unity
                 return;
 
             isPaused = !isPaused;
-            Time.timeScale = isPaused ? 0f : 1f;
+
+            // Online play deliberately does not stop the clock. There is nothing to pause on the
+            // other device, so freezing time here would only stop this one drawing — moves would
+            // keep arriving and queue up unseen behind the panel, and the game would lurch when it
+            // came back. The panel still opens for the settings, and GameController still ignores
+            // taps while it is up; the game simply carries on underneath it.
+            if (gameController.CurrentMode != GameMode.Online)
+                Time.timeScale = isPaused ? 0f : 1f;
+
             gameController.SetPaused(isPaused);
             SetPanelActive(pausePanel, isPaused);
 
@@ -378,6 +516,16 @@ namespace NsoloGame.Unity
             if (gameController == null)
             {
                 Debug.LogError("MenuManager: GameController not assigned.");
+                return;
+            }
+
+            // There is no rematch yet: replaying an online game means agreeing with the opponent to
+            // play another, which needs a message and a screen that do not exist in this pass.
+            // Restarting into online mode with no live match would deal a board nobody is playing
+            // on, so this goes back to the menu instead — where Play Online is two taps away.
+            if (gameController.CurrentMode == GameMode.Online)
+            {
+                ShowWelcome();
                 return;
             }
 
@@ -528,12 +676,17 @@ namespace NsoloGame.Unity
             SetPanelActive(pausePanel, false);
             SetGameplayVisible(true);
 
-            bool playerWon = winner == 1;
-            bool hotSeat = gameController != null &&
-                           gameController.CurrentMode == GameMode.VersusHuman;
+            GameMode currentMode = gameController != null ? gameController.CurrentMode : GameMode.VersusComputer;
+            bool hotSeat = currentMode == GameMode.VersusHuman;
+            bool online = currentMode == GameMode.Online;
 
-            // Neither side is "you" in a two-player game, so the result is stated by seat rather
-            // than as a victory or a defeat.
+            // Who "you" is differs by mode. Against the computer it is player 1; online it is
+            // whichever seat this device was given, which is player 2 for whoever joined; in
+            // hot-seat it is nobody, because both sides are people in the same room.
+            bool playerWon = online
+                ? winner == gameController.OnlineLocalPlayer
+                : winner == 1;
+
             if (gameOverTitleText != null)
                 gameOverTitleText.text = hotSeat
                     ? $"PLAYER {winner} WINS"
@@ -549,6 +702,10 @@ namespace NsoloGame.Unity
                 {
                     gameOverDifficultyText.text = "2 PLAYER";
                 }
+                else if (online)
+                {
+                    gameOverDifficultyText.text = "ONLINE";
+                }
                 else
                 {
                     int d = gameController != null ? gameController.CurrentDifficulty : -1;
@@ -563,21 +720,29 @@ namespace NsoloGame.Unity
                 gameOverTimeText.text = $"{(int)(seconds / 60):00}:{(int)(seconds % 60):00}";
             }
 
-            // The lifetime victory count is a record of games against the AI. A two-player result
-            // was deliberately not filed into it, so showing it here would imply otherwise.
+            // The lifetime victory count is a record of games against the AI. Neither two-player
+            // results nor online ones are filed into it, so showing it here would imply otherwise.
             if (gameOverVictoryCountText != null)
-                gameOverVictoryCountText.text = hotSeat
+                gameOverVictoryCountText.text = hotSeat || online
                     ? "--"
                     : (ProfileManager.Instance?.GamesWon ?? 0).ToString();
 
             if (gameOverSummaryText != null)
+            {
+                // Online, the two score arguments are still player 1's and player 2's stones, so
+                // they have to be read from this device's seat rather than assumed to be "mine,
+                // theirs" — otherwise the joiner sees their score and their opponent's swapped.
+                int mine = online && gameController.OnlineLocalPlayer == 2 ? aiCaptured : playerCaptured;
+                int theirs = online && gameController.OnlineLocalPlayer == 2 ? playerCaptured : aiCaptured;
+
+                // "OPP" rather than "Computer" or "Opponent": this label is a 200px box at font 30
+                // with autosizing off, so a longer word wraps onto a second line and overflows it.
                 gameOverSummaryText.text = hotSeat
                     ? $"P1: {playerCaptured} - P2: {aiCaptured}"
-                    // "OPP" rather than "Computer": this label is a 200px box at font 30 with
-                    // autosizing off, so the longer word wraps onto a second line and overflows it.
                     : (playerWon
-                        ? $"You: {playerCaptured} - {aiCaptured}"
-                        : $"OPP: {aiCaptured} - {playerCaptured}");
+                        ? $"You: {mine} - {theirs}"
+                        : $"OPP: {theirs} - {mine}");
+            }
 
             SetPanelActive(gameOverPanel, true);
         }
@@ -592,6 +757,13 @@ namespace NsoloGame.Unity
 
         private void HideAllPanels()
         {
+            // The online screens are owned by OnlineFlowController, but they still have to go down
+            // whenever the menu shows something else. Left out of this, a panel switched on in the
+            // scene — or stranded by an aborted flow — sits full-screen over the menu and eats every
+            // tap, which looks exactly like the buttons underneath being broken.
+            ResolveOnlineFlow();
+            onlineFlow?.HideScreens();
+
             SetPanelActive(welcomePanel,    false);
             SetPanelActive(tutorialPanel,   false);
             SetPanelActive(modePanel,       false);
@@ -614,6 +786,11 @@ namespace NsoloGame.Unity
         private void SetGameplayVisible(bool visible)
         {
             if (gameplayRoot != null) gameplayRoot.SetActive(visible);
+
+            // The board is 3D and stays in the scene behind every menu, so hiding the HUD is not
+            // enough to stop it being tapped. Telling the controller outright is.
+            ResolveGameController();
+            gameController?.SetBoardInputEnabled(visible);
         }
 
         private void ResolveGameController()
