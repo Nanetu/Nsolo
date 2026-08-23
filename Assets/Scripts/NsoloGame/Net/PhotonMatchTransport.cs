@@ -34,6 +34,19 @@ namespace NsoloGame.Net
         /// </summary>
         private const int MaxCodeAttempts = 5;
 
+        /// <summary>
+        /// How long the connection is held open while the app is in the background, in seconds.
+        ///
+        /// Sharing a room code means leaving the game: open WhatsApp, find the person, paste, send,
+        /// come back. PUN's default allowance for that is sixty seconds, which is a realistic amount
+        /// of time to spend picking a contact — and running out of it means coming back to a dead
+        /// room and a code you have already sent someone. Five minutes covers the errand with room
+        /// to spare. Nothing is being kept alive that a player is not actively coming back to: the
+        /// timer only runs while the app is backgrounded, and the room still closes as soon as they
+        /// actually leave.
+        /// </summary>
+        private const float BackgroundKeepAliveSeconds = 300f;
+
         private enum Intent { None, Create, Join }
 
         private Intent intent = Intent.None;
@@ -143,6 +156,11 @@ namespace NsoloGame.Net
             // empty nickname, which Photon allows but which reads as a blank in any UI.
             string username = NsoloGame.Unity.ProfileManager.Instance?.Username;
             PhotonNetwork.NickName = string.IsNullOrWhiteSpace(username) ? "Player" : username;
+
+            // Set here rather than at startup so a player who never goes online never causes PUN's
+            // handler object to be created. It is idempotent, so every path through this method can
+            // safely assert it.
+            PhotonNetwork.KeepAliveInBackground = BackgroundKeepAliveSeconds;
 
             if (PhotonNetwork.InRoom)
             {

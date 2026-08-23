@@ -31,6 +31,13 @@ namespace NsoloGame.Net
         private bool started;
 
         /// <summary>
+        /// A begin packet has been seen. Either player may send one, so two can be in flight at
+        /// once when both tap at the same moment; without this the second would send everyone to
+        /// the arrangement screen a second time, on top of the one they are already using.
+        /// </summary>
+        private bool begun;
+
+        /// <summary>
         /// Host-side: a result has been broadcast and has not come back yet. Until it does,
         /// <see cref="CurrentPlayer"/> still names the player who just moved, so without this a
         /// second request arriving inside that window would pass the turn check and be played twice.
@@ -38,6 +45,25 @@ namespace NsoloGame.Net
         /// point of a host is not to depend on the other client behaving.
         /// </summary>
         private bool awaitingOwnBroadcast;
+
+        /// <summary>
+        /// When <see cref="awaitingOwnBroadcast"/> was raised, so it cannot latch forever.
+        ///
+        /// The flag is cleared by the broadcast coming back. Photon sends reliably, so it always
+        /// should — but "always" here means "unless the connection hiccups at the wrong moment",
+        /// and the failure mode if it does is the worst kind: every later move is refused as "one
+        /// still in flight" and the match is frozen with no error on screen and no way out but
+        /// quitting. Treating a result that has not returned within
+        /// <see cref="BroadcastTimeoutSeconds"/> as lost turns a dead match into a skipped beat.
+        /// </summary>
+        private float awaitingSince;
+
+        /// <summary>
+        /// How long to wait for our own broadcast before assuming it is not coming. Far longer than
+        /// a round trip, because clearing this early would let a genuinely in-flight move be played
+        /// twice — the exact thing the flag exists to prevent.
+        /// </summary>
+        private const float BroadcastTimeoutSeconds = 5f;
 
         private readonly Action<string> messageHandler;
         private readonly Action<MatchEndReason> matchEndedHandler;
@@ -104,8 +130,9 @@ namespace NsoloGame.Net
         public event Action<MoveResult> MoveApplied;
 
         /// <summary>
-        /// The host has pressed START GAME. Both devices leave the lobby and go to the board to
-        /// arrange their stones; no board state exists yet.
+        /// One of the two players has pressed START GAME. Both devices leave the lobby and go to
+        /// the board to arrange their stones; no board state exists yet. Fires once per match, so a
+        /// second begin packet — both players tapping at once — is not a second trip to the board.
         /// </summary>
         public event Action MatchBegun;
 
@@ -142,21 +169,27 @@ namespace NsoloGame.Net
             IsHost = isHost;
             LocalPlayer = isHost ? 1 : 2;
             started = false;
+            begun = false;
             formations[1] = null;
             formations[2] = null;
         }
 
         /// <summary>
-        /// Leaves the lobby and sends both players to arrange their stones. Host only — the client's
-        /// START GAME does nothing, which is why the button is only offered to the host.
+        /// Leaves the lobby and sends both players to arrange their stones. Either player may call
+        /// it.
+        ///
+        /// This is not the start of play, which is the reason it is not the host's alone: it opens
+        /// the arrangement phase, where each side lays out its own half independently and at its own
+        /// pace, and the first move cannot happen until both formations have arrived
+        /// (<see cref="StartMatch"/>). Nobody is dropped into a live game by the other pressing it,
+        /// so restricting it bought no protection and cost the joiner a room they could not get out
+        /// of the lobby of when the host put their phone down.
+        ///
+        /// Authority is unaffected. The host still runs every rule; this packet carries no state.
         /// </summary>
         public void RequestBegin()
         {
-            if (!IsHost)
-            {
-                Debug.LogWarning("NetworkMatch: only the host can start the game.");
-                return;
-            }
+            if (begun) return;
 
             transport.Broadcast(NetProtocol.ToJson(new BeginMessage()));
         }
@@ -234,6 +267,9 @@ namespace NsoloGame.Net
             switch (NetProtocol.PeekAction(json))
             {
                 case NetProtocol.ActionBegin:
+                    if (begun) break;
+
+                    begun = true;
                     MatchBegun?.Invoke();
                     break;
                 case NetProtocol.ActionFormation:
@@ -351,8 +387,16 @@ namespace NsoloGame.Net
 
             if (awaitingOwnBroadcast)
             {
-                Debug.LogWarning($"NetworkMatch: player {player} sent a move while the previous one was still in flight. Ignored.");
-                return;
+                if (UnityEngine.Time.unscaledTime - awaitingSince < BroadcastTimeoutSeconds)
+                {
+                    Debug.LogWarning($"NetworkMatch: player {player} sent a move while the previous one was still in flight. Ignored.");
+                    return;
+                }
+
+                Debug.LogError(
+                    $"NetworkMatch: the previous result never came back after {BroadcastTimeoutSeconds}s. " +
+                    "Treating it as lost and accepting this move, rather than leaving the match stuck.");
+                awaitingOwnBroadcast = false;
             }
 
             if (player != CurrentPlayer)
@@ -373,6 +417,7 @@ namespace NsoloGame.Net
             MoveResult result = engine.ApplyMoveWithResult(Board, move, player);
 
             awaitingOwnBroadcast = true;
+            awaitingSince = UnityEngine.Time.unscaledTime;
             transport.Broadcast(NetProtocol.ToJson(
                 new MoveResultMessage(player, move, result.Board, result.CapturedStones)));
         }

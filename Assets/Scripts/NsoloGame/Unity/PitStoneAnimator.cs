@@ -182,10 +182,15 @@ namespace NsoloGame.Unity
 
                 Vector3 end = GetIncomingStonePosition(landing.r, landing.c, destinationPitStones, stone);
 
-                yield return MoveStone(stone.transform, start, end, secondsPerStone, moveArcHeight);
+                // The hit fires slightly before the move finishes, not after it. MoveStone eases
+                // with SmoothStep, so the stone covers the last tenth of the distance in the last
+                // fifth of the time — it looks landed well before the coroutine returns, and a
+                // sound played on return arrives audibly late. Firing at the point the eye reads as
+                // contact puts them back together.
+                yield return MoveStone(stone.transform, start, end, secondsPerStone, moveArcHeight,
+                                       PlayStoneHit, HitCuePoint);
 
                 destinationPitStones.Add(stone);
-                PlayStoneHit();
             }
 
             for (int i = movingCount; i < pickedStones.Count; i++)
@@ -206,13 +211,30 @@ namespace NsoloGame.Unity
             return pickedStones;
         }
 
-        private IEnumerator MoveStone(Transform stone, Vector3 start, Vector3 end, float duration, float arcHeight)
+        /// <summary>
+        /// How far through a move the stone reads as having landed. SmoothStep has it 90% of the
+        /// way there by this point and barely moving, so this is where the eye says "contact".
+        /// </summary>
+        private const float HitCuePoint = 0.82f;
+
+        /// <summary>
+        /// Moves one stone, optionally firing <paramref name="cue"/> partway through.
+        ///
+        /// The cue exists for audio. Playing a sound when this coroutine returns puts it after the
+        /// visual landing by the tail of the easing curve plus a frame — small numbers that add up
+        /// to an audible lag. The cue fires once, at <paramref name="cueAt"/>, and is skipped
+        /// entirely if the move is cut short, so a skipped animation stays silent rather than
+        /// firing a burst of hits at once.
+        /// </summary>
+        private IEnumerator MoveStone(Transform stone, Vector3 start, Vector3 end, float duration, float arcHeight,
+                                      System.Action cue = null, float cueAt = 1f)
         {
             if (stone == null)
                 yield break;
 
             float elapsed = 0f;
             duration = Mathf.Max(0.01f, duration);
+            bool cueFired = false;
 
             while (elapsed < duration)
             {
@@ -224,6 +246,13 @@ namespace NsoloGame.Unity
                     break;
 
                 float t = elapsed / duration;
+
+                if (!cueFired && cue != null && t >= cueAt)
+                {
+                    cueFired = true;
+                    cue();
+                }
+
                 float eased = Mathf.SmoothStep(0f, 1f, t);
                 Vector3 position = Vector3.Lerp(start, end, eased);
                 position.y += Mathf.Sin(eased * Mathf.PI) * arcHeight;
@@ -236,6 +265,11 @@ namespace NsoloGame.Unity
 
             if (stone != null)
                 stone.position = end;
+
+            // A move that ran to completion without reaching the cue point — a single-frame move on
+            // a slow frame, say — still owes its sound.
+            if (!cueFired && cue != null && !skipRequested)
+                cue();
         }
 
         /// <summary>

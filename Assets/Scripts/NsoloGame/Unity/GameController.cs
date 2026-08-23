@@ -171,6 +171,26 @@ namespace NsoloGame.Unity
         /// </summary>
         public float LastGameSeconds { get; private set; }
 
+        /// <summary>
+        /// Stones this device's player took over the finished game, and their longest relay in it.
+        ///
+        /// Both are per-player rather than per-game totals. A relay is the run of laps a single
+        /// move turns into when the last stone keeps landing in an occupied hole, and it is the one
+        /// number in Nsolo a player actually brags about — so it has to be *theirs*, not whichever
+        /// side happened to manage it. Captures likewise: the board carries no separate captured
+        /// pile, so this is the only place the figure survives the game that produced it.
+        /// </summary>
+        public int LastGameCaptures { get; private set; }
+        public int LastGameLongestRelay { get; private set; }
+
+        // Indexed by player number, so seat 1 and seat 2 are counted apart and the read-outs above
+        // can pick whichever seat this device was playing. Index 0 is unused.
+        private readonly int[] capturesThisGame = new int[3];
+        private readonly int[] longestRelayThisGame = new int[3];
+
+        /// <summary>Which seat this device is playing: its own online seat, or the human's.</summary>
+        private int LocalSeat => mode == GameMode.Online ? onlineLocalPlayer : humanPlayer;
+
         private void Awake()
         {
             Log("Awake()");
@@ -255,6 +275,9 @@ namespace NsoloGame.Unity
             gameBoard = new GameBoard();
             gameStartTime = Time.time;
             formationHeld = 0;
+
+            System.Array.Clear(capturesThisGame, 0, capturesThisGame.Length);
+            System.Array.Clear(longestRelayThisGame, 0, longestRelayThisGame.Length);
 
             bool hotSeat = mode == GameMode.VersusHuman;
             bool online = mode == GameMode.Online;
@@ -659,6 +682,7 @@ namespace NsoloGame.Unity
             GameBoard startingBoard = gameBoard.Clone();
             MoveResult moveResult = ApplyMoveWithLandingTrace(pendingMove, humanPlayer);
             currentMoveSegmentCount = moveResult.SowingSegments?.Count ?? 0;
+            TrackMoveStats(moveResult);
             uiManager.ShowStatus("Sowing");
             RefreshActionButton();
             yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
@@ -719,6 +743,7 @@ namespace NsoloGame.Unity
             GameBoard startingBoard = gameBoard.Clone();
             MoveResult moveResult = ApplyMoveWithLandingTrace(move, aiPlayer);
             currentMoveSegmentCount = moveResult.SowingSegments?.Count ?? 0;
+            TrackMoveStats(moveResult);
             uiManager.ShowStatus("Computer sowing");
             yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
             gameBoard = moveResult.Board;
@@ -923,6 +948,7 @@ namespace NsoloGame.Unity
 
             GameBoard startingBoard = gameBoard.Clone();
             currentMoveSegmentCount = moveResult.SowingSegments?.Count ?? 0;
+            TrackMoveStats(moveResult);
 
             uiManager.ShowStatus(sowingStatus);
             RefreshActionButton();
@@ -1309,6 +1335,14 @@ namespace NsoloGame.Unity
             RefreshActionButton();
             AudioManager.Silence();
 
+            // Said on the board as well as in the dialog, because the dialog can be dismissed: a
+            // player who stays to read the final position would otherwise be looking at a board
+            // still captioned with whatever the last move was, as though it were their turn.
+            uiManager.ShowStatus("Match ended");
+            uiManager.ShowLastMove(reason == MatchEndReason.OpponentLeft
+                ? "Your opponent left. This is the final position."
+                : "Connection lost. This is the final position.");
+
             // The modal itself belongs to OnlineFlowController, which hears about this from the
             // transport directly. This method's job is only to stop the game that was in progress —
             // it does not know what panels exist and should not.
@@ -1578,6 +1612,10 @@ namespace NsoloGame.Unity
 
             float elapsed = Time.time - gameStartTime;
             LastGameSeconds = elapsed;
+
+            int seat = LocalSeat;
+            LastGameCaptures = seat >= 1 && seat < capturesThisGame.Length ? capturesThisGame[seat] : 0;
+            LastGameLongestRelay = seat >= 1 && seat < longestRelayThisGame.Length ? longestRelayThisGame[seat] : 0;
             bool humanWon = winner == humanPlayer;
             bool hotSeat = mode == GameMode.VersusHuman;
             bool online = mode == GameMode.Online;
@@ -1593,6 +1631,12 @@ namespace NsoloGame.Unity
             {
                 ProfileManager.Instance?.RecordGameResult((int)aiDifficulty, humanWon, elapsed);
             }
+
+            // Filed for every mode, unlike the result above. The objection that keeps hot-seat and
+            // online out of the win record is that those stats are keyed by AI difficulty and a
+            // game played at no difficulty would make them meaningless. These three are not: time
+            // at the board is time at the board, and a relay is a relay whoever was across from you.
+            ProfileManager.Instance?.RecordSessionStats(elapsed, LastGameCaptures, LastGameLongestRelay);
 
             AudioManager.Silence();
             // Somebody in the room won a hot-seat game, so it always gets the victory sting.
@@ -1615,6 +1659,27 @@ namespace NsoloGame.Unity
             else uiManager?.ShowGameOver(winner, hotSeat);
 
             GameOver?.Invoke(winner, p1Stones, p2Stones);
+        }
+
+        /// <summary>
+        /// Files one move's captures and relay length against the player who made it.
+        ///
+        /// Called from all three move paths — the human's, the computer's, and the shared one
+        /// hot-seat and online both run through — and keyed on the result's own player rather than
+        /// on whose turn the caller believes it is. That last part matters online, where the move
+        /// being applied is one the host resolved and may belong to either seat.
+        /// </summary>
+        private void TrackMoveStats(MoveResult moveResult)
+        {
+            if (moveResult == null) return;
+
+            int player = moveResult.Player;
+            if (player < 1 || player >= capturesThisGame.Length) return;
+
+            capturesThisGame[player] += moveResult.CapturedStones;
+
+            int relay = moveResult.SowingSegments?.Count ?? 0;
+            if (relay > longestRelayThisGame[player]) longestRelayThisGame[player] = relay;
         }
 
         /// <summary>

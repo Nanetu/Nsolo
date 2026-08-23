@@ -36,13 +36,13 @@ namespace NsoloGame.Unity
         [SerializeField] private TMP_Text lobbyPlayer2NameText;
         [SerializeField] private TMP_Text lobbyPlayer1StatusText;
         [SerializeField] private TMP_Text lobbyPlayer2StatusText;
-        [Tooltip("Host only. Held disabled until an opponent has joined.")]
+        [Tooltip("Either player. Held disabled until an opponent has joined.")]
         [SerializeField] private Button lobbyStartButton;
-        [Tooltip("Optional. Explains why START GAME is unavailable on the joiner's screen.")]
+        [Tooltip("Optional. Says what the lobby is waiting for.")]
         [SerializeField] private TMP_Text lobbyHintText;
-        [Tooltip("Optional. Copies the room code to the clipboard.")]
+        [Tooltip("Optional. Copies the room code to the clipboard. Shown only while the host is still waiting for someone to join.")]
         [SerializeField] private Button lobbyCopyCodeButton;
-        [Tooltip("Optional. Opens the Android share sheet so the code can go to WhatsApp, SMS, etc.")]
+        [Tooltip("Optional. Opens the Android share sheet so the code can go to WhatsApp, SMS, etc. Shown only while the host is still waiting for someone to join.")]
         [SerializeField] private Button lobbyShareCodeButton;
 
         private IMatchTransport Transport => transport;
@@ -62,6 +62,14 @@ namespace NsoloGame.Unity
         private bool connecting;
 
         private float connectingSince;
+
+        /// <summary>
+        /// Why the last match ended, held while the player is still looking at the finished board.
+        /// Null at every other time, which is what tells the pause button whether it has a dialog to
+        /// put back up. Cleared on the way out rather than when the dialog is dismissed, because
+        /// dismissing it is exactly the case that needs it kept.
+        /// </summary>
+        private MatchEndReason? endedReason;
 
         /// <summary>
         /// How long to wait before deciding a connection attempt is not coming back. Photon's own
@@ -132,6 +140,54 @@ namespace NsoloGame.Unity
             return cursor.parent == canvas.transform ? cursor.gameObject : null;
         }
 
+        private void Start()
+        {
+            // After NsoloUI has built its register, which happens once every Awake has run.
+            AdoptRebuiltUI();
+            HideScreens();
+        }
+
+        /// <summary>
+        /// Points the online slots at rebuilt screens where they exist, and leaves them alone
+        /// otherwise. The counterpart of MenuManager.AdoptRebuiltUI — see there for why the wiring
+        /// runs this way round.
+        /// </summary>
+        private void AdoptRebuiltUI()
+        {
+            GameObject rebuiltOnline = NsoloUI.Panel(PanelId.Online);
+            if (rebuiltOnline != null && rebuiltOnline != onlinePanel)
+            {
+                if (onlinePanel != null) onlinePanel.SetActive(false);
+                onlinePanel = rebuiltOnline;
+            }
+
+            GameObject rebuiltLobby = NsoloUI.Panel(PanelId.Lobby);
+            if (rebuiltLobby != null && rebuiltLobby != lobbyPanel)
+            {
+                if (lobbyPanel != null) lobbyPanel.SetActive(false);
+                lobbyPanel = rebuiltLobby;
+            }
+
+            lobbyRoomCodeText     = Pick(NsoloUI.Label(ElementId.LobbyRoomCodeLabel),      lobbyRoomCodeText);
+            lobbyPlayer1NameText  = Pick(NsoloUI.Label(ElementId.LobbyPlayer1NameLabel),   lobbyPlayer1NameText);
+            lobbyPlayer2NameText  = Pick(NsoloUI.Label(ElementId.LobbyPlayer2NameLabel),   lobbyPlayer2NameText);
+            lobbyPlayer1StatusText = Pick(NsoloUI.Label(ElementId.LobbyPlayer1StatusLabel), lobbyPlayer1StatusText);
+            lobbyPlayer2StatusText = Pick(NsoloUI.Label(ElementId.LobbyPlayer2StatusLabel), lobbyPlayer2StatusText);
+            lobbyHintText         = Pick(NsoloUI.Label(ElementId.LobbyHintLabel),          lobbyHintText);
+
+            lobbyStartButton     = Pick(NsoloUI.Button(ElementId.LobbyStart),     lobbyStartButton);
+            lobbyCopyCodeButton  = Pick(NsoloUI.Button(ElementId.LobbyCopyCode),  lobbyCopyCodeButton);
+            lobbyShareCodeButton = Pick(NsoloUI.Button(ElementId.LobbyShareCode), lobbyShareCodeButton);
+
+            // NsoloElement has already bound these two if they were tagged. Binding again would
+            // double the action, so only a button that arrived through a slot is bound here.
+            if (NsoloUI.Button(ElementId.LobbyCopyCode) == null) Bind(lobbyCopyCodeButton, CopyRoomCode);
+            if (NsoloUI.Button(ElementId.LobbyShareCode) == null) Bind(lobbyShareCodeButton, ShareRoomCode);
+        }
+
+        private static T Pick<T>(T rebuilt, T current) where T : UnityEngine.Object
+            => rebuilt != null ? rebuilt : current;
+
         /// <summary>
         /// Hides both online screens without touching the connection. The menu calls this whenever
         /// it shows anything else, so a panel left switched on in the scene — or one stranded by an
@@ -139,8 +195,8 @@ namespace NsoloGame.Unity
         /// </summary>
         public void HideScreens()
         {
-            SetActive(onlinePanel, false);
-            SetActive(lobbyPanel, false);
+            SetOnlineVisible(false);
+            SetLobbyVisible(false);
         }
 
         private void OnDestroy() => Unsubscribe();
@@ -214,12 +270,14 @@ namespace NsoloGame.Unity
 
             // Arriving at this screen is a fresh start, so nothing from a previous attempt is still
             // in flight as far as the player is concerned. Clearing here means a latch left on by
-            // an attempt that never came back cannot follow them in and kill both buttons.
+            // an attempt that never came back cannot follow them in and kill both buttons — and
+            // that the last match's ending cannot follow them into the next one.
             SetConnecting(false);
+            endedReason = null;
 
             menuManager?.HideAllPanelsForOnline();
-            SetActive(onlinePanel, true);
-            SetActive(lobbyPanel, false);
+            SetOnlineVisible(true);
+            SetLobbyVisible(false);
             GameModals.Instance?.HideAll();
 
             // Get the connection under way now, while they are still deciding which card to press.
@@ -332,18 +390,53 @@ namespace NsoloGame.Unity
             CopyRoomCode();
         }
 
-        /// <summary>Wire to the lobby's START GAME button. Host only.</summary>
+        /// <summary>
+        /// Wire to the lobby's START GAME button. Either player — see
+        /// <see cref="NetworkMatch.RequestBegin"/> for why this is not the host's alone.
+        /// </summary>
         public void StartGame()
         {
-            if (match == null || !match.IsHost) return;
+            if (match == null) return;
 
             AudioManager.Click();
             Haptics.Light();
             match.RequestBegin();
         }
 
-        /// <summary>Wire to the online panel's BACK and the lobby's BACK / LEAVE LOBBY.</summary>
+        /// <summary>Whether the lobby is the screen currently up. Read by the back-button handler.</summary>
+        public bool IsLobbyVisible => lobbyIntended && lobbyPanel != null && lobbyPanel.activeSelf;
+
+        /// <summary>Whether the Create/Join screen is up.</summary>
+        public bool IsOnlineVisible => onlineIntended && onlinePanel != null && onlinePanel.activeSelf;
+
+        /// <summary>Whether we are holding a room right now — the thing leaving would destroy.</summary>
+        private bool InRoom => Transport != null && !string.IsNullOrEmpty(Transport.RoomCode);
+
+        /// <summary>
+        /// Wire to the online panel's BACK and the lobby's BACK / LEAVE LOBBY.
+        ///
+        /// Asks first when there is a room to lose. Leaving is not a navigation step here — it
+        /// destroys the room, kills a code that may already have been sent to somebody, and throws
+        /// the other player out if they have arrived. The confirmation is skipped when no room is
+        /// held, so BACK on the Create/Join screen stays a plain back button.
+        /// </summary>
         public void LeaveOnline()
+        {
+            if (!InRoom || GameModals.Instance == null)
+            {
+                LeaveOnlineConfirmed();
+                return;
+            }
+
+            GameModals.Instance.ShowDialog(
+                "Leave the room?",
+                "This closes the room and your code stops working.\n\nIf someone is on their way in, they won't be able to join.",
+                new GameModals.Choice("STAY", null),
+                new GameModals.Choice("LEAVE", LeaveOnlineConfirmed));
+        }
+
+        /// <summary>The actual leave, once it is no longer in question.</summary>
+        private void LeaveOnlineConfirmed()
         {
             CloseAndCleanup();
             menuManager?.ShowWelcome();
@@ -357,6 +450,7 @@ namespace NsoloGame.Unity
         public void CloseAndCleanup()
         {
             SetConnecting(false);
+            endedReason = null;
             CloseMatch();
             GameModals.Instance?.HideAll();
             HideScreens();
@@ -409,8 +503,8 @@ namespace NsoloGame.Unity
         private void ShowLobby()
         {
             menuManager?.HideAllPanelsForOnline();
-            SetActive(onlinePanel, false);
-            SetActive(lobbyPanel, true);
+            SetOnlineVisible(false);
+            SetLobbyVisible(true);
             RefreshLobby();
         }
 
@@ -436,24 +530,48 @@ namespace NsoloGame.Unity
             if (lobbyPlayer1NameText != null) lobbyPlayer1NameText.text = iAmOne ? mine : theirs;
             if (lobbyPlayer2NameText != null) lobbyPlayer2NameText.text = iAmOne ? theirs : mine;
 
-            string p1State = iAmOne ? "READY" : (opponentHere ? "READY" : "WAITING");
-            string p2State = iAmOne ? (opponentHere ? "READY" : "WAITING") : "READY";
-            if (lobbyPlayer1StatusText != null) lobbyPlayer1StatusText.text = p1State;
-            if (lobbyPlayer2StatusText != null) lobbyPlayer2StatusText.text = p2State;
+            // A seat is ready when somebody is sitting in it. Yours always is — you are looking at
+            // the screen — so the only seat that changes is the other one.
+            bool p1Ready = iAmOne || opponentHere;
+            bool p2Ready = !iAmOne || opponentHere;
 
-            // Only the host can start, and only once there is someone to start against. The joiner
-            // is told why rather than being left prodding a dead button.
-            if (lobbyStartButton != null)
-            {
-                lobbyStartButton.gameObject.SetActive(match.IsHost);
-                lobbyStartButton.interactable = match.IsHost && opponentHere;
-            }
+            if (lobbyPlayer1StatusText != null) lobbyPlayer1StatusText.text = p1Ready ? "READY" : "WAITING";
+            if (lobbyPlayer2StatusText != null) lobbyPlayer2StatusText.text = p2Ready ? "READY" : "WAITING";
+
+            // Player 2's row has two bars parked on the same spot: the grey waiting one, and a gold
+            // copy of player 1's. Swapping them is what makes an opponent arriving *look* like
+            // something happening — a word changing from WAITING to READY is easy to miss, a row
+            // turning gold is not. Both calls are no-ops until the bars are tagged, so a lobby
+            // without them behaves exactly as it did.
+            NsoloUI.SetVisible(ElementId.LobbyPlayer2WaitingBar, !p2Ready);
+            NsoloUI.SetVisible(ElementId.LobbyPlayer2ReadyBar, p2Ready);
+
+            // The code is the host's to hand out, and only until someone takes it up. The joiner
+            // already has it — they typed it in to get here — and a room only seats two, so anyone
+            // they passed it on to would arrive to find it full. Offering them COPY and SHARE was
+            // offering an invitation they have no room for.
+            SetButtonActive(lobbyCopyCodeButton, match.IsHost && !opponentHere);
+            SetButtonActive(lobbyShareCodeButton, match.IsHost && !opponentHere);
+
+            // Either player may start, once there is someone to start against. START GAME does not
+            // begin play — it takes both devices to the arrangement screen, where each side lays out
+            // its own half at its own pace and the first move waits for both. So neither player can
+            // pull the other into a game they were not ready for, and the joiner is no longer stuck
+            // in the lobby when the host puts their phone down.
+            //
+            // Hidden rather than greyed out while waiting. A disabled button still reads as
+            // something you were meant to be able to press, so the first thing a player alone in a
+            // lobby does is press it and wonder what is broken; with nothing there, the hint line
+            // below is the only thing to read and it says exactly what the room is waiting for.
+            // It appears the moment the opponent lands, which is also the clearest signal that they
+            // have.
+            SetButtonActive(lobbyStartButton, opponentHere);
 
             if (lobbyHintText != null)
-                lobbyHintText.text = match.IsHost
-                    ? (opponentHere ? "Both players are in. Start when you're ready."
-                                    : "Share your room code with a friend.")
-                    : "Waiting for the host to start the game.";
+                lobbyHintText.text = opponentHere
+                    ? "Both players are in. Either of you can start."
+                    : (match.IsHost ? "Share your room code with a friend."
+                                    : "Waiting for another player to join.");
         }
 
         private void HandleMatchBegun()
@@ -492,8 +610,15 @@ namespace NsoloGame.Unity
 
             // Losing the opponent while still in the lobby is not a lost match — it is a room that
             // went back to waiting. Only tear down once a game was actually under way.
-            if (lobbyPanel != null && lobbyPanel.activeSelf && reason == MatchEndReason.OpponentLeft)
+            if (IsLobbyVisible && reason == MatchEndReason.OpponentLeft)
             {
+                // Re-read the seats on the way past. They are normally captured once and held,
+                // because a seat number changing under a game in progress would be far worse than a
+                // stale one — but nothing has been played yet, so that protection is not buying
+                // anything here. PUN will have promoted whoever is left, and picking that up is what
+                // lets a joiner whose host walked out host the next person to try the code, rather
+                // than sitting in a room where neither side can run the rules.
+                EnsureMatch();
                 RefreshLobby();
                 return;
             }
@@ -506,13 +631,41 @@ namespace NsoloGame.Unity
                 return;
             }
 
+            endedReason = reason;
+            ShowMatchEndedDialog();
+        }
+
+        /// <summary>
+        /// Puts the "this match can't continue" question back up. Separate from
+        /// <see cref="HandleMatchEnded"/> so the pause button can raise it again after the player
+        /// dismissed it to look at the board.
+        /// </summary>
+        private void ShowMatchEndedDialog()
+        {
             GameModals.Instance.ShowDisconnected(
-                opponentLeft: reason == MatchEndReason.OpponentLeft,
-                onMenu: () => { HideScreens(); menuManager?.ShowWelcome(); },
+                opponentLeft: endedReason == MatchEndReason.OpponentLeft,
+                // Nothing to do: dismissing is the whole action. The board is still drawn underneath
+                // and nothing can move it now, so this leaves them alone with it.
+                onStay: null,
+                onMenu: () => { endedReason = null; HideScreens(); menuManager?.ShowWelcome(); },
                 // Whatever difficulty they last chose, so this is one tap rather than a trip through
                 // a difficulty screen they did not ask for.
-                onPlayComputer: () => { HideScreens(); menuManager?.StartGame(PlayerPrefs.GetInt("AIDifficulty", 1)); },
-                onPlayHuman: () => { HideScreens(); menuManager?.StartHotSeatGame(); });
+                onPlayComputer: () => { endedReason = null; HideScreens(); menuManager?.StartGame(PlayerPrefs.GetInt("AIDifficulty", 1)); },
+                onPlayHuman: () => { endedReason = null; HideScreens(); menuManager?.StartHotSeatGame(); });
+        }
+
+        /// <summary>
+        /// Re-raises the dialog for a match that ended and was dismissed, and reports whether there
+        /// was one. Called by the pause button, which is otherwise dead once the game is over — so
+        /// staying on the board to read it cannot become a screen with no way off it.
+        /// </summary>
+        public bool ReshowMatchEndedDialog()
+        {
+            if (endedReason == null || GameModals.Instance == null) return false;
+            if (GameModals.Instance.IsBlocking) return false;
+
+            ShowMatchEndedDialog();
+            return true;
         }
 
         // ── Helpers ───────────────────────────────────────────────────────
@@ -538,6 +691,58 @@ namespace NsoloGame.Unity
         private static void SetActive(GameObject obj, bool active)
         {
             if (obj != null) obj.SetActive(active);
+        }
+
+        /// <summary>
+        /// Whether each online screen is *meant* to be up. Flipped the instant a screen is asked to
+        /// come or go, which is earlier than the object itself changes.
+        ///
+        /// That gap is the whole reason these exist. These two screens used to be switched with a
+        /// bare SetActive, so <c>activeSelf</c> was an honest answer; animating them out means the
+        /// object stays active for the 130ms it takes to leave, and every read of "is the lobby
+        /// up?" during that window would say yes about a screen the player has already left. One of
+        /// those reads decides whether a departing opponent means "the room went back to waiting" or
+        /// "the match is over", and getting it wrong there strands a live game.
+        /// </summary>
+        private bool onlineIntended;
+        private bool lobbyIntended;
+
+        private void SetOnlineVisible(bool visible)
+        {
+            onlineIntended = visible;
+            AnimateScreen(onlinePanel, visible);
+        }
+
+        private void SetLobbyVisible(bool visible)
+        {
+            lobbyIntended = visible;
+            AnimateScreen(lobbyPanel, visible);
+        }
+
+        /// <summary>
+        /// Shows or hides an online screen the same way the menu shows its own — through the
+        /// panel's transition when it has one, so these two stop being the only screens in the game
+        /// that cut. A panel with no transition keeps the old instant behaviour.
+        /// </summary>
+        private static void AnimateScreen(GameObject panel, bool visible)
+        {
+            if (panel == null) return;
+
+            var transition = panel.GetComponent<PanelTransition>();
+            if (transition == null)
+            {
+                panel.SetActive(visible);
+                return;
+            }
+
+            if (visible) transition.Show();
+            else transition.Hide();
+        }
+
+        /// <summary>Both lobby buttons are optional slots, so this tolerates an empty one.</summary>
+        private static void SetButtonActive(Button button, bool active)
+        {
+            if (button != null) button.gameObject.SetActive(active);
         }
     }
 }

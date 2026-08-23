@@ -130,6 +130,9 @@ namespace NsoloGame.Unity
         [Tooltip("Third button, used only by the disconnect dialog.")]
         [SerializeField] private Button dialogButtonC;
         [SerializeField] private TMP_Text dialogButtonCLabel;
+        [Tooltip("Fourth button. Only the disconnect dialog asks this many questions at once.")]
+        [SerializeField] private Button dialogButtonD;
+        [SerializeField] private TMP_Text dialogButtonDLabel;
 
         [Header("Motion")]
         [SerializeField] private float fadeInSeconds = 0.18f;
@@ -260,9 +263,28 @@ namespace NsoloGame.Unity
             Bind(0, choices, dialogButtonA, dialogButtonALabel);
             Bind(1, choices, dialogButtonB, dialogButtonBLabel);
             Bind(2, choices, dialogButtonC, dialogButtonCLabel);
+            Bind(3, choices, dialogButtonD, dialogButtonDLabel);
 
             Show(dialog);
         }
+
+        /// <summary>
+        /// Where each button sits, indexed by how many the dialog is showing.
+        ///
+        /// Positions come from here rather than from wherever the scene left them because the count
+        /// varies from one to four and the card has nothing painted on it to align to. A fixed
+        /// position per slot left the three-button disconnect dialog reading out of order — the
+        /// third choice sat above the first two — and gave a fourth nowhere to go.
+        /// </summary>
+        private static readonly Vector2[][] ButtonLayouts =
+        {
+            new Vector2[0],
+            new[] { new Vector2(0f, -180f) },
+            new[] { new Vector2(-165f, -180f), new Vector2(165f, -180f) },
+            new[] { new Vector2(-165f, -60f), new Vector2(165f, -60f), new Vector2(0f, -180f) },
+            new[] { new Vector2(-165f, -60f), new Vector2(165f, -60f),
+                    new Vector2(-165f, -180f), new Vector2(165f, -180f) },
+        };
 
         private void Bind(int index, Choice[] choices, Button button, TMP_Text label)
         {
@@ -277,6 +299,10 @@ namespace NsoloGame.Unity
             Choice c = choices[index];
             button.gameObject.SetActive(true);
             if (label != null) label.text = c.Label;
+
+            if (choices.Length < ButtonLayouts.Length &&
+                button.transform is RectTransform rect)
+                rect.anchoredPosition = ButtonLayouts[choices.Length][index];
 
             Rebind(button, () =>
             {
@@ -307,16 +333,23 @@ namespace NsoloGame.Unity
         /// The match is over because the connection is. Offers a way out rather than a retry: there
         /// is no saved state to come back to in this pass, so reconnecting to the same game is not
         /// something that could work.
+        ///
+        /// The first choice is to stay where they are. The board is still on screen underneath —
+        /// GameController stops the game without clearing it — and being marched off a position you
+        /// were in the middle of reading, because somebody else quit, is its own small insult. The
+        /// other three remain one tap away afterwards: the pause button re-raises this dialog, since
+        /// with the game over it has nothing else to do.
         /// </summary>
-        public void ShowDisconnected(bool opponentLeft, Action onMenu, Action onPlayComputer, Action onPlayHuman)
+        public void ShowDisconnected(bool opponentLeft, Action onStay, Action onMenu, Action onPlayComputer, Action onPlayHuman)
         {
             // Plain language, and specific about which of the two happened, because they call for
             // different feelings — one is bad luck, the other is the opponent leaving.
             ShowDialog(
-                "Connection Lost",
+                opponentLeft ? "Opponent Left" : "Connection Lost",
                 opponentLeft
-                    ? "Your opponent has left the game.\n\nThis match can't continue."
-                    : "The connection was lost.\n\nThis match can't continue.",
+                    ? "Your opponent has left the game.\n\nThis match can't continue, but you can stay and look at the final position."
+                    : "The connection was lost.\n\nThis match can't continue, but you can stay and look at the final position.",
+                new Choice("STAY ON BOARD", onStay),
                 new Choice("MAIN MENU", onMenu),
                 new Choice("VS COMPUTER", onPlayComputer),
                 new Choice("VS HUMAN", onPlayHuman));
@@ -343,6 +376,26 @@ namespace NsoloGame.Unity
                 "Are you sure you want to forfeit?\n\nThis ends the game and your opponent wins.",
                 new Choice("FORFEIT", onConfirm),
                 new Choice("CANCEL", onCancel));
+        }
+
+        /// <summary>
+        /// What the Android back button does while a modal is up.
+        ///
+        /// Join Room cancels, because backing out of a text field is exactly what back means there
+        /// and its cancel path is already safe. Everything else swallows the press: the shared
+        /// dialog asks questions whose answers are not interchangeable — the first choice is STAY
+        /// on one and FORFEIT on another — so there is no "dismiss" that is right in general, and
+        /// guessing would eventually forfeit somebody's match with a stray tap.
+        /// </summary>
+        public void BackRequested()
+        {
+            if (joinRoom.IsVisible && joinCancelButton != null)
+            {
+                joinCancelButton.onClick.Invoke();
+                return;
+            }
+
+            // Consumed deliberately.
         }
 
         // ── Helpers ───────────────────────────────────────────────────────

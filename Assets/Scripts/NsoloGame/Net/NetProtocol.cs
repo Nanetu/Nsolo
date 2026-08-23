@@ -96,11 +96,14 @@ namespace NsoloGame.Net
     }
 
     /// <summary>
-    /// The host leaving the lobby and taking everyone with them. Carries nothing: it is a signal,
+    /// A player leaving the lobby and taking the other with them. Carries nothing: it is a signal,
     /// not data — the board does not exist yet, because both players are about to arrange it.
     ///
-    /// Only the host sends this, which is what makes START GAME the host's button. A client that
-    /// somehow sent one would be ignored, since the receiver checks who it came from.
+    /// Either side may send it, and the receiver does not care which did. That is safe precisely
+    /// because it carries no state: it opens the arrangement phase, where each player fills in their
+    /// own half and neither waits on the other, and every rule that follows still runs on the host.
+    /// The receiver acts on the first one and ignores any second, since both players tapping at the
+    /// same moment is an ordinary race rather than an error.
     /// </summary>
     [Serializable]
     public class BeginMessage

@@ -32,6 +32,19 @@ namespace NsoloGame.Unity
         public int currentWinStreak;
         public int longestWinStreak;
 
+        // Career totals for the rebuilt profile page. Unlike the counters above, these are filed
+        // for every mode — see ProfileManager.RecordSessionStats for why that is not an
+        // inconsistency. Fields absent from an older save load as zero, which is the right
+        // starting value for all four, so no migration is needed.
+        public float totalPlaytimeSeconds;
+        public int totalStonesCaptured;
+
+        /// <summary>Most stones taken in a single game — the figure the profile page shows.</summary>
+        public int mostStonesInAGame;
+
+        /// <summary>Longest relay ever pulled off: the most laps one move turned into.</summary>
+        public int longestRelay;
+
         // Achievements, once earned, stay earned even if the underlying stat later regresses
         // (e.g. a win streak dropping back below the threshold), so they're stored explicitly.
         public bool firstWinUnlocked;
@@ -152,6 +165,42 @@ namespace NsoloGame.Unity
             Load();
         }
 
+        private void Start()
+        {
+            // After NsoloUI has built its register — see NsoloUI.Bootstrap for why that is later
+            // than Awake. RefreshProfileUI is called by MenuManager.ShowProfile, which is later
+            // still, so the labels are pointed at the rebuilt screen before anything writes to them.
+            AdoptRebuiltUI();
+        }
+
+        /// <summary>
+        /// Points the profile slots at a rebuilt profile screen where one exists, and leaves them
+        /// alone otherwise. The counterpart of MenuManager.AdoptRebuiltUI.
+        ///
+        /// The achievement slots and the avatar sprite list are deliberately not covered. Those are
+        /// content rather than wiring — which sprite means which avatar is a decision, and a
+        /// register keyed on "what is this" has nothing to say about it.
+        /// </summary>
+        private void AdoptRebuiltUI()
+        {
+            usernameText     = Pick(NsoloUI.Label(ElementId.ProfileUsernameLabel),    usernameText);
+            gamesPlayedText  = Pick(NsoloUI.Label(ElementId.ProfileGamesPlayedLabel), gamesPlayedText);
+            gamesWonText     = Pick(NsoloUI.Label(ElementId.ProfileGamesWonLabel),    gamesWonText);
+            winRateText      = Pick(NsoloUI.Label(ElementId.ProfileWinRateLabel),     winRateText);
+            shortestWinText  = Pick(NsoloUI.Label(ElementId.ProfileShortestWinLabel), shortestWinText);
+            easyWinsText     = Pick(NsoloUI.Label(ElementId.ProfileEasyWinsLabel),    easyWinsText);
+            hardWinsText     = Pick(NsoloUI.Label(ElementId.ProfileHardWinsLabel),    hardWinsText);
+            breakdownText    = Pick(NsoloUI.Label(ElementId.ProfileBreakdownLabel),   breakdownText);
+
+            usernameInput  = Pick(NsoloUI.InputField(ElementId.ProfileUsernameInput),  usernameInput);
+            avatarIcon     = Pick(NsoloUI.Image(ElementId.ProfileAvatarIcon),          avatarIcon);
+            avatarMonogram = Pick(NsoloUI.Label(ElementId.ProfileAvatarMonogram),      avatarMonogram);
+            avatarButton   = Pick(NsoloUI.Button(ElementId.ProfileAvatarButton),       avatarButton);
+        }
+
+        private static T Pick<T>(T rebuilt, T current) where T : UnityEngine.Object
+            => rebuilt != null ? rebuilt : current;
+
         // ── Persistence ───────────────────────────────────────────────────
 
         private void Load()
@@ -206,6 +255,47 @@ namespace NsoloGame.Unity
 
             EvaluateAchievements();
             Save();
+        }
+
+        /// <summary>
+        /// Files the career totals from a finished game, in every mode.
+        ///
+        /// Separate from <see cref="RecordGameResult"/> on purpose. That one is keyed by AI
+        /// difficulty — win rate, per-difficulty records, the "loser starts next" rule — so a
+        /// hot-seat or online game filed under a difficulty nobody chose would corrupt it. These
+        /// three totals have no such axis, so excluding those modes would just make them wrong in
+        /// the other direction: hours at the board that the profile pretends never happened.
+        /// </summary>
+        public void RecordSessionStats(float elapsedSeconds, int stonesCaptured, int longestRelay)
+        {
+            if (profile == null) return;
+
+            if (elapsedSeconds > 0f) profile.totalPlaytimeSeconds += elapsedSeconds;
+
+            if (stonesCaptured > 0)
+            {
+                profile.totalStonesCaptured += stonesCaptured;
+                if (stonesCaptured > profile.mostStonesInAGame)
+                    profile.mostStonesInAGame = stonesCaptured;
+            }
+
+            if (longestRelay > profile.longestRelay) profile.longestRelay = longestRelay;
+
+            Save();
+        }
+
+        /// <summary>Career playtime as the profile page shows it: "3h 24m", or "12m" under an hour.</summary>
+        private static string FormatPlaytime(float seconds)
+        {
+            int total = Mathf.Max(0, Mathf.RoundToInt(seconds));
+            int hours = total / 3600;
+            int minutes = total % 3600 / 60;
+
+            if (hours > 0) return $"{hours}h {minutes}m";
+
+            // Under a minute reads as "0m", which looks like nothing was recorded. Seconds are
+            // only ever shown in this one corner, where the alternative is worse.
+            return total >= 60 ? $"{minutes}m" : $"{total}s";
         }
 
         // ── Achievements ──────────────────────────────────────────────────
@@ -322,8 +412,39 @@ namespace NsoloGame.Unity
                     $"          Medium: {profile.mediumWins}W/{profile.mediumLosses}L"+
                     $"       Hard: {profile.hardWins}W/{profile.hardLosses}L";
 
+            RefreshCareerStats();
             RefreshAchievements();
             ApplyAvatar();
+        }
+
+        /// <summary>
+        /// Writes the rebuilt profile page's six stat cards and three breakdown rows.
+        ///
+        /// These go through the register rather than through serialized slots, because each card is
+        /// a single label carrying its own heading — "MATCHES", "BEST STREAK" — and
+        /// <see cref="NsoloUI.SetValue"/> keeps that heading and adds only the figure. Nothing here
+        /// needs to know what the cards are called, which is the point: renaming one in the
+        /// Inspector cannot break it.
+        /// </summary>
+        private void RefreshCareerStats()
+        {
+            int played = profile.gamesPlayed;
+            int rate = played > 0 ? Mathf.RoundToInt((float)profile.gamesWon / played * 100f) : 0;
+
+            NsoloUI.SetValue(ElementId.ProfileMatchesLabel, played.ToString());
+            NsoloUI.SetValue(ElementId.ProfileWinRateLabel, $"{rate}%");
+            NsoloUI.SetValue(ElementId.ProfileBestStreakLabel, profile.longestWinStreak.ToString());
+            NsoloUI.SetValue(ElementId.ProfileTotalPlaytimeLabel, FormatPlaytime(profile.totalPlaytimeSeconds));
+            NsoloUI.SetValue(ElementId.ProfileStonesCapturedLabel, profile.mostStonesInAGame.ToString());
+            NsoloUI.SetValue(ElementId.ProfileLongestRelayLabel, profile.longestRelay.ToString());
+
+            // One line each, so these read across rather than stacking like the cards do.
+            NsoloUI.SetValue(ElementId.ProfileBreakdownEasyLabel,
+                $"{profile.easyWins}W / {profile.easyLosses}L", " ");
+            NsoloUI.SetValue(ElementId.ProfileBreakdownMediumLabel,
+                $"{profile.mediumWins}W / {profile.mediumLosses}L", " ");
+            NsoloUI.SetValue(ElementId.ProfileBreakdownHardLabel,
+                $"{profile.hardWins}W / {profile.hardLosses}L", " ");
         }
 
         // ── Avatar ────────────────────────────────────────────────────────

@@ -128,8 +128,12 @@ namespace NsoloGame.Unity
 
             if (stoneHitClip == null)
             {
-                AudioClip generated = animator.CreateStoneHitClip();
-                animator.SetAudio(audioSource, generated);
+                // Prefer whatever Stone Drop is set to on AudioManager, so the clip is chosen in one
+                // place. The synthesised click is the last resort, not the default — it used to be
+                // reached whenever this slot was empty, which is why assigning Stone Drop appeared
+                // to change nothing.
+                AudioClip fromManager = AudioManager.StoneDropClip;
+                animator.SetAudio(audioSource, fromManager != null ? fromManager : animator.CreateStoneHitClip());
             }
         }
 
