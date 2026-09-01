@@ -38,3 +38,5 @@ Assets/Materials/Menu/Figma/Figma Downloader.asset.meta
 # Raw Figma document (15MB, read directly by tooling; not a Unity asset).
 FigmaSource/
 Assets/FigmaSource/
+
+nul
