@@ -7923,7 +7923,7 @@ RectTransform:
   m_GameObject: {fileID: 117781428}
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 3.618914, y: 1.7404821, z: 1.0412025}
+  m_LocalScale: {x: 2.5933137, y: 1.7404821, z: 1.0412025}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 1065673655}
@@ -7953,7 +7953,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: 
+  m_text: Maverick
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 80d17e49ca0bd954dbf4d49ff1ca4e7f, type: 2}
   m_sharedMaterial: {fileID: 1685912239032878575, guid: 80d17e49ca0bd954dbf4d49ff1ca4e7f, type: 2}
@@ -8016,7 +8016,7 @@ MonoBehaviour:
   m_VertexBufferAutoSizeReduction: 0
   m_useMaxVisibleDescender: 1
   m_pageToDisplay: 1
-  m_margin: {x: 0, y: 0, z: 0, w: 0}
+  m_margin: {x: -45.356438, y: 0, z: 26.370003, w: 0}
   m_isUsingLegacyAnimationComponent: 0
   m_isVolumetricText: 0
   m_hasFontAssetChanged: 0
@@ -9473,6 +9473,7 @@ MonoBehaviour:
   playerScoreText: {fileID: 1042559910}
   aiScoreText: {fileID: 352041579}
   opponentNameText: {fileID: 74006003}
+  playerNameText: {fileID: 0}
   lastMoveText: {fileID: 1052035945}
   undoButton: {fileID: 0}
   actionButton: {fileID: 0}
@@ -18004,7 +18005,12 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "Your last stone decides what happens next. There are three endings.\n\n1. It lands in an EMPTY pit — your turn is over.\n\n2. It lands in a pit that already had stones, on your OUTER row — lift that whole pit and carry on sowing.\n\n3. It lands in a pit that already had stones, on your INNER row — look straight across at the two enemy pits in that column. If both have stones, you CAPTURE them all. If either is empty, you just lift and carry on sowing."
+  m_text: "Your last stone decides what happens next. There are three endings.\n\n1.
+    It lands in an EMPTY pit \u2014 your turn is over.\n\n2. It lands in a pit that
+    already had stones, on your OUTER row \u2014 lift that whole pit and carry on
+    sowing.\n\n3. It lands in a pit that already had stones, on your INNER row \u2014
+    look straight across at the two enemy pits in that column. If both have stones,
+    you CAPTURE them all. If either is empty, you just lift and carry on sowing."
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
   m_sharedMaterial: {fileID: -1150527355653173760, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
@@ -24453,6 +24459,120 @@ MonoBehaviour:
   replaceExistingClicks: 1
   addPressFeedback: 1
   pressShape: 0
+--- !u!114 &790000900
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1661885141}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8bcde9c82585940438c5c546e2659dcf, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  id: 10
+  addTransition: 1
+  staggerContents: 1
+  staggerSeconds: 0.035
+  elementSeconds: 0.18
+  elementLift: 18
+--- !u!114 &790000910
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 710000010}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  id: 411
+  replaceExistingClicks: 1
+  addPressFeedback: 1
+  pressShape: 0
+--- !u!114 &790000911
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 710000030}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  id: 409
+  replaceExistingClicks: 1
+  addPressFeedback: 0
+  pressShape: 0
+--- !u!114 &790000912
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 710000040}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  id: 410
+  replaceExistingClicks: 1
+  addPressFeedback: 0
+  pressShape: 0
+--- !u!114 &790000913
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 710000120}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  id: 412
+  replaceExistingClicks: 1
+  addPressFeedback: 1
+  pressShape: 0
+--- !u!114 &790000920
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 74006000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  id: 1005
+  replaceExistingClicks: 1
+  addPressFeedback: 0
+  pressShape: 0
+--- !u!114 &790000921
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 193646588}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  id: 1006
+  replaceExistingClicks: 1
+  addPressFeedback: 0
+  pressShape: 0
 --- !u!1 &791000000
 GameObject:
   m_ObjectHideFlags: 0
@@ -25401,7 +25521,11 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "Your turn keeps rolling until a stone finally lands in an empty pit. A single tap can run for a long time.\n\nYou win when your opponent cannot move at all — when they have no pit left holding 2 or more stones.\n\nSo capturing is not the point by itself. The point is to leave them with nothing they are allowed to play."
+  m_text: "Your turn keeps rolling until a stone finally lands in an empty pit. A
+    single tap can run for a long time.\n\nYou win when your opponent cannot move
+    at all \u2014 when they have no pit left holding 2 or more stones.\n\nSo capturing
+    is not the point by itself. The point is to leave them with nothing they are
+    allowed to play."
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
   m_sharedMaterial: {fileID: -1150527355653173760, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
@@ -30118,7 +30242,16 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "Tap one of your pits and you lift every stone out of it.\n\nThose stones then drop one at a time into the pits that follow, moving anti-clockwise around your own two rows.\n\nYou can only lift a pit holding 2 or more stones. That is the only restriction on what you may play."
+  m_text: 'Tap one of your pits and you lift every stone out of it.
+
+
+    Those stones
+    then drop one at a time into the pits that follow, moving anti-clockwise around
+    your own two rows.
+
+
+    You can only lift a pit holding 2 or more stones. That
+    is the only restriction on what you may play.'
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
   m_sharedMaterial: {fileID: -1150527355653173760, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
@@ -30228,12 +30361,12 @@ RectTransform:
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
+  - {fileID: 169614589}
   - {fileID: 117781429}
   - {fileID: 2736841}
   - {fileID: 868118058}
   - {fileID: 1438269988}
   - {fileID: 1935644900}
-  - {fileID: 169614589}
   - {fileID: 284966248}
   - {fileID: 506733365}
   - {fileID: 657589830}
@@ -32391,7 +32524,11 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "Captured stones do not go into a store. You put them straight back to work on your own side.\n\nThey start dropping from the pit just after the one you FIRST lifted this turn — not from where the capture happened. That is why one capture can set off a very long chain.\n\nThe pit you landed in keeps its own stones. You only take the two enemy pits."
+  m_text: "Captured stones do not go into a store. You put them straight back to
+    work on your own side.\n\nThey start dropping from the pit just after the one
+    you FIRST lifted this turn \u2014 not from where the capture happened. That is
+    why one capture can set off a very long chain.\n\nThe pit you landed in keeps
+    its own stones. You only take the two enemy pits."
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
   m_sharedMaterial: {fileID: -1150527355653173760, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
@@ -39100,6 +39237,7 @@ RectTransform:
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
+  - {fileID: 372254234}
   - {fileID: 484911925}
   - {fileID: 1406937464}
   - {fileID: 1548984341}
@@ -39107,7 +39245,6 @@ RectTransform:
   - {fileID: 1359877450}
   - {fileID: 836225788}
   - {fileID: 834285689}
-  - {fileID: 372254234}
   - {fileID: 1229649722}
   - {fileID: 1830298735}
   - {fileID: 1222358991}
@@ -41633,7 +41770,10 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "Nsolo is a game about shuffling stones around your own side of the board and starving your opponent of moves.\n\nTwo players. 64 stones. No dice, no luck — you can always see everything.\n\nRead the next two sections and you can start playing. The rest you can pick up as you go."
+  m_text: "Nsolo is a game about shuffling stones around your own side of the board
+    and starving your opponent of moves.\n\nTwo players. 64 stones. No dice, no luck
+    \u2014 you can always see everything.\n\nRead the next two sections and you can
+    start playing. The rest you can pick up as you go."
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
   m_sharedMaterial: {fileID: -1150527355653173760, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
@@ -43641,7 +43781,17 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "Before the game starts, you place your own 32 stones across your 16 pits however you like.\n\nTap a pit to add a stone. Tap it again to take one back. Press START when you are happy.\n\nOne thing to know: a pit needs at least 2 stones before you are allowed to play it. Any pit you leave holding a single stone is dead until something lands in it."
+  m_text: 'Before the game starts, you place your own 32 stones across your 16 pits
+    however you like.
+
+
+    Tap a pit to add a stone. Tap it again to take one back.
+    Press START when you are happy.
+
+
+    One thing to know: a pit needs at least
+    2 stones before you are allowed to play it. Any pit you leave holding a single
+    stone is dead until something lands in it.'
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
   m_sharedMaterial: {fileID: -1150527355653173760, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
@@ -44789,7 +44939,7 @@ RectTransform:
   m_GameObject: {fileID: 1935644899}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1.1910238, y: 3.801087, z: 1}
+  m_LocalScale: {x: 2.5470014, y: 5.704291, z: 1.5007}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 37329607}
@@ -44798,7 +44948,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 959, y: -439}
+  m_AnchoredPosition: {x: 1023, y: 472}
   m_SizeDelta: {x: 160, y: 30}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1935644901
@@ -44858,14 +45008,14 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_Material: {fileID: 0}
-  m_Color: {r: 1, g: 1, b: 1, a: 1}
+  m_Color: {r: 1, g: 1, b: 1, a: 0}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 21300000, guid: 3a5fc85260adcd242888256e6c156654, type: 3}
+  m_Sprite: {fileID: 0}
   m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
@@ -46567,7 +46717,19 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "Four rows of eight pits.\n\nThe bottom two rows are yours. The top two are your opponent's.\n\nOf your two rows, the one nearer the middle is your INNER row. That is the only row that can capture, so it is the one to watch.\n\nYour stones never leave your two rows. You are not trying to reach their side."
+  m_text: 'Four rows of eight pits.
+
+
+    The bottom two rows are yours. The top
+    two are your opponent''s.
+
+
+    Of your two rows, the one nearer the middle is
+    your INNER row. That is the only row that can capture, so it is the one to watch.
+
+
+    Your
+    stones never leave your two rows. You are not trying to reach their side.'
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
   m_sharedMaterial: {fileID: -1150527355653173760, guid: 1ce794294464a1e42b1f0e4e99829d6f, type: 2}
@@ -47872,117 +48034,3 @@ SceneRoots:
   - {fileID: 3196644518062414751}
   - {fileID: 800288849}
   - {fileID: 720000081}
---- !u!114 &790000900
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1661885141}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8bcde9c82585940438c5c546e2659dcf, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  id: 10
-  addTransition: 1
-  staggerContents: 1
-  staggerSeconds: 0.035
-  elementSeconds: 0.18
-  elementLift: 18
---- !u!114 &790000910
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 710000010}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  id: 411
-  replaceExistingClicks: 1
-  addPressFeedback: 1
-  pressShape: 0
---- !u!114 &790000911
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 710000030}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  id: 409
-  replaceExistingClicks: 1
-  addPressFeedback: 0
-  pressShape: 0
---- !u!114 &790000912
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 710000040}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  id: 410
-  replaceExistingClicks: 1
-  addPressFeedback: 0
-  pressShape: 0
---- !u!114 &790000913
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 710000120}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  id: 412
-  replaceExistingClicks: 1
-  addPressFeedback: 1
-  pressShape: 0
---- !u!114 &790000920
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 74006000}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  id: 1005
-  replaceExistingClicks: 1
-  addPressFeedback: 0
-  pressShape: 0
---- !u!114 &790000921
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 193646588}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  id: 1006
-  replaceExistingClicks: 1
-  addPressFeedback: 0
-  pressShape: 0

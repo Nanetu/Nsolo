@@ -48,7 +48,15 @@ namespace NsoloGame.Unity
         {
             if (rect == null) return Pill;
 
+            // On-screen proportions, not the authored rect's. Elements exported from Figma arrive
+            // at a uniform 160x30 and are sized by a non-uniform localScale instead, so judging by
+            // rect.size alone reads every button in the game as the same 5.3:1 sliver and hands a
+            // pill to the square cards on the mode and difficulty screens.
             Vector2 size = rect.rect.size;
+            Vector3 scale = rect.localScale;
+            size.x *= Mathf.Abs(scale.x);
+            size.y *= Mathf.Abs(scale.y);
+
             if (size.y <= 0f) return Pill;
 
             return size.x / size.y >= 2.2f ? Pill : Card;

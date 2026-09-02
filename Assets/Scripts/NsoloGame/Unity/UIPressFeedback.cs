@@ -72,10 +72,6 @@ namespace NsoloGame.Unity
             var go = new GameObject("PressLayer", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
             var layerRect = (RectTransform)go.transform;
             layerRect.SetParent(rect, false);
-            layerRect.anchorMin = Vector2.zero;
-            layerRect.anchorMax = Vector2.one;
-            layerRect.offsetMin = Vector2.zero;
-            layerRect.offsetMax = Vector2.zero;
 
             layer = go.GetComponent<Image>();
             layer.sprite = shape;
@@ -87,6 +83,41 @@ namespace NsoloGame.Unity
 
             // Drawn first so it sits behind any label the button owns.
             layerRect.SetAsFirstSibling();
+
+            FitLayer();
+        }
+
+        /// <summary>
+        /// Sizes the layer to the button's on-screen rect and undoes the button's own scale.
+        ///
+        /// Stretching to the parent with anchors would be simpler, and was what this did first, but
+        /// it puts the layer in the parent's scaled space. Buttons exported from Figma keep a
+        /// uniform 160x30 rect and get their real size from a non-uniform localScale — around 4x
+        /// across and 6x down — so a stretched layer has its 9-slice corners stretched by those
+        /// same factors. The corner radius is the one thing the sliced sprite exists to hold
+        /// constant, and it came out smeared into lopsided ovals that visibly overhang the artwork.
+        ///
+        /// So the layer is given the button's *effective* size and the inverse of its scale, which
+        /// cancel to the same on-screen rectangle while leaving the border to be drawn in unscaled
+        /// units. The press animation still scales the button, and the layer still rides along with
+        /// it, because that multiplies on top of what is set here.
+        /// </summary>
+        private void FitLayer()
+        {
+            if (layer == null) return;
+
+            var layerRect = (RectTransform)layer.transform;
+
+            float sx = Mathf.Approximately(homeScale.x, 0f) ? 1f : homeScale.x;
+            float sy = Mathf.Approximately(homeScale.y, 0f) ? 1f : homeScale.y;
+
+            Vector2 size = rect.rect.size;
+
+            layerRect.anchorMin = layerRect.anchorMax = new Vector2(0.5f, 0.5f);
+            layerRect.pivot = new Vector2(0.5f, 0.5f);
+            layerRect.anchoredPosition = Vector2.zero;
+            layerRect.sizeDelta = new Vector2(size.x * Mathf.Abs(sx), size.y * Mathf.Abs(sy));
+            layerRect.localScale = new Vector3(1f / sx, 1f / sy, 1f);
         }
 
         private void OnEnable()
@@ -94,6 +125,10 @@ namespace NsoloGame.Unity
             held = false;
             rect.localScale = homeScale;
             SetAlpha(0f);
+
+            // Re-fitted rather than only built once, so resizing a button in the editor is picked
+            // up the next time its panel opens instead of needing a restart.
+            FitLayer();
 
             if (idleAlpha > 0f) motion = StartCoroutine(Idle());
         }

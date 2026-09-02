@@ -124,6 +124,34 @@ element(s) bound`, no "nothing to bind" warnings, no exceptions.
   So five of nine populate. The four that do not are structural, not wiring: the new panel has no
   object for them. Listed in section 2 as decisions rather than bugs.
 
+## 1d. Fourth pass — the press glow
+
+The glow is a `PressLayer` GameObject built at runtime in `UIPressFeedback.Awake()`. It is not in
+the scene, which is why there is nothing to find and nothing to scale by hand.
+
+It was never the wrong size — it stretched to the button's rect exactly. Two other things were
+wrong, both caused by how the Figma buttons are sized. **Every** button in the game has a
+`sizeDelta` of 160×30 and gets its real size from a non-uniform `localScale`, typically about 4×
+across and 6× down.
+
+- **Corners smeared.** The whole point of the 9-sliced sprite is to hold the corner radius constant
+  while the middle stretches, and that only works when the button is stretched by *sizeDelta*.
+  Scaling the parent instead scaled the corners with it — 4× horizontally, 6× vertically — so the
+  rounded ends came out as lopsided ovals overhanging the artwork. `FitLayer()` now gives the layer
+  the button's *effective* size and the inverse of its scale. They cancel to the same on-screen
+  rectangle, but the border is drawn in unscaled units. The press animation still rides on top.
+- **Every button got a pill.** `UIShapes.For` judged shape from `rect.size`, which is 160×30 for
+  everything — a 5.3:1 sliver — so it always returned `Pill`. It now measures the scaled size, so
+  the near-square mode and difficulty cards (ratios 1.06–1.35) correctly get `Card`.
+
+Verified in play mode across 18 buttons: layer size matches button size to the pixel in every case,
+and the sprite is now `NsoloCard` for the cards and `NsoloPill` for the pills.
+
+If you still want the glow tighter or looser than the button, the knobs are on `UIPressFeedback`:
+`pressAlpha` (brightness, 0.14), `pressedScale` (how far the button shrinks, 0.97), `seconds`
+(0.09), and `idleAlpha` for a slow shimmer on one hero button per screen. The corner radius itself
+is `UIShapes.Rounded(30, …)` for pills and `(16, …)` for cards.
+
 ---
 
 ## 2. What remains on the UI — needs your hand
