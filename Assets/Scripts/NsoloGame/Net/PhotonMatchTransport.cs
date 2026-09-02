@@ -190,8 +190,32 @@ namespace NsoloGame.Net
                 Debug.LogError("PhotonMatchTransport: ConnectUsingSettings failed — is the App ID set in PhotonServerSettings?");
                 intent = Intent.None;
                 ConnectionFailed?.Invoke();
+                return;
             }
+
+            // Asserted immediately after connecting, which PUN explicitly supports, and which
+            // overrides whatever AppVersion happens to be sitting in PhotonServerSettings.
+            PhotonNetwork.GameVersion = NetworkProtocolVersion;
         }
+
+        /// <summary>
+        /// What this build speaks on the wire, and the only thing that should ever partition players
+        /// from each other.
+        ///
+        /// Photon puts clients with different AppVersions into separate virtual applications: they
+        /// connect fine and see none of each other's rooms, which surfaces as "room not found" for a
+        /// code that certainly exists. PUN builds that AppVersion out of
+        /// <see cref="PhotonNetwork.GameVersion"/>, and <c>ConnectUsingSettings</c> takes
+        /// GameVersion from <c>PhotonServerSettings.AppVersion</c> — a field the Photon wizard
+        /// edits, and which has nothing to do with whether two builds can actually understand one
+        /// another. Editing UI, art or menus therefore had every ability to cut players off from
+        /// their friends, which is not a property anybody would choose.
+        ///
+        /// Pinning it here decouples the two. Bump this ONLY when a change would genuinely break an
+        /// older client — the event codes or payload shape in <see cref="NetProtocol"/> — and never
+        /// for a version number, a UI rebuild or a store release.
+        /// </summary>
+        private const string NetworkProtocolVersion = "nsolo-net-1";
 
         private void ActOnIntent()
         {

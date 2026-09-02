@@ -26,9 +26,11 @@ namespace NsoloGame.Unity
         [Header("HUD — Scores")]
         [SerializeField] private TMP_Text playerScoreText;
         [SerializeField] private TMP_Text aiScoreText;
-        [Tooltip("Online only: the opponent's name on the line above the left-hand score box, where " +
-                 "the other backgrounds paint COMPUTER or PLAYER 1. Hidden in the local modes.")]
+        [Tooltip("Caption above the left-hand score box, which is always the opponent's. Reads " +
+                 "COMPUTER, PLAYER 1, or the opponent's name online.")]
         [SerializeField] private TMP_Text opponentNameText;
+        [Tooltip("Caption above the right-hand score box, which is always this device's.")]
+        [SerializeField] private TMP_Text playerNameText;
 
         [Header("HUD — Last Move")]
         [SerializeField] private TMP_Text lastMoveText;
@@ -393,21 +395,63 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
-        /// Names the opponent above the left-hand score box.
+        /// Captions the two score boxes for the mode being played. Left box is always the
+        /// opponent's, right box always this device's.
         ///
-        /// Only online needs this. The other two backgrounds paint their own caption there —
-        /// "COMPUTER" and "PLAYER 1" — and the online one deliberately leaves that line blank
-        /// because the name is not known until there is somebody in the room. Passing null or an
-        /// empty name hides the label, so the local modes are unaffected.
+        /// These used to be part of the background image — a different picture per mode, each with
+        /// its captions already lettered on — so only the online one needed a label, and only
+        /// because a name cannot be painted in advance. The rebuilt HUD draws the captions as text,
+        /// so all three modes have to be spelled out here.
+        ///
+        /// <paramref name="opponentName"/> is used in <see cref="GameMode.Online"/> only, and falls
+        /// back to OPPONENT while the nickname is still settling.
         /// </summary>
-        public void SetOpponentName(string opponentName)
+        public void SetSeatNames(GameMode mode, string opponentName = null)
         {
-            if (opponentNameText == null) return;
+            TMP_Text opponent = Pick(NsoloUI.Label(ElementId.HudOpponentNameLabel), opponentNameText);
+            TMP_Text player = Pick(NsoloUI.Label(ElementId.HudPlayerNameLabel), playerNameText);
 
-            bool show = !string.IsNullOrWhiteSpace(opponentName);
-            opponentNameText.gameObject.SetActive(show);
-            if (show) opponentNameText.text = opponentName.ToUpperInvariant();
+            string opponentCaption;
+            string playerCaption;
+
+            switch (mode)
+            {
+                case GameMode.VersusHuman:
+                    // Neither seat is "you" — both are people in the room, so they are named by
+                    // seat. Player 1 is the left box because that is the seat the left box holds.
+                    opponentCaption = "PLAYER 1";
+                    playerCaption = "PLAYER 2";
+                    break;
+
+                case GameMode.Online:
+                    opponentCaption = string.IsNullOrWhiteSpace(opponentName)
+                        ? "OPPONENT"
+                        : opponentName.ToUpperInvariant();
+                    playerCaption = "YOU";
+                    break;
+
+                default:
+                    opponentCaption = "COMPUTER";
+                    playerCaption = "YOU";
+                    break;
+            }
+
+            if (opponent != null)
+            {
+                opponent.gameObject.SetActive(true);
+                opponent.text = opponentCaption;
+            }
+
+            if (player != null)
+            {
+                player.gameObject.SetActive(true);
+                player.text = playerCaption;
+            }
         }
+
+        /// <summary>A tagged element wins over whatever was dragged into the slot, as elsewhere.</summary>
+        private static T Pick<T>(T rebuilt, T current) where T : UnityEngine.Object
+            => rebuilt != null ? rebuilt : current;
 
         private void UpdateScores(GameBoard board)
         {

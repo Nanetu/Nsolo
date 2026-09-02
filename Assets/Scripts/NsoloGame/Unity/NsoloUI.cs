@@ -157,6 +157,15 @@ namespace NsoloGame.Unity
         [InspectorName("In game/HINT")] HudHint = 1002,
         [InspectorName("In game/Main action button")] HudAction = 1003,
         [InspectorName("In game/CONFIRM formation")] HudConfirmFormation = 1004,
+
+        /// <summary>
+        /// The two captions above the score boxes. They used to be painted into the background art
+        /// — one image per mode, each with COMPUTER or PLAYER 1 already lettered on it — so nothing
+        /// ever wrote them. The rebuilt HUD makes them real labels, which means the mode has to say
+        /// what they read. Left box is the opponent's, right box is this device's.
+        /// </summary>
+        [InspectorName("In game/Label - opponent name (left box)")] HudOpponentNameLabel = 1005,
+        [InspectorName("In game/Label - your name (right box)")] HudPlayerNameLabel = 1006,
     }
 
     /// <summary>

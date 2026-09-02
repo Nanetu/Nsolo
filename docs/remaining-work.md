@@ -81,6 +81,51 @@ element(s) bound`, no "nothing to bind" warnings, no exceptions.
 
 ---
 
+## 1c. Third pass — HUD captions, Photon versioning, game-over audit
+
+- **Score-box captions now written per mode.** They had been *painted into the background art* —
+  a different image per mode with COMPUTER or PLAYER 1 already lettered on — so the rebuilt HUD's
+  real text objects had nothing writing to them. `UIManager.SetOpponentName` was online-only and
+  there was no player-side field at all. Replaced with `SetSeatNames(GameMode, opponentName)`:
+  COMPUTER / YOU, PLAYER 1 / PLAYER 2, and the opponent's Photon nickname / YOU. New ids
+  `HudOpponentNameLabel` (1005) and `HudPlayerNameLabel` (1006), tagged on
+  `HUDRoot/Player1/OpponentNameText` and `HUDRoot/Player2/PlayerNameText`. Verified in play mode
+  for all three modes.
+
+- **Photon: cross-version play was broken by a settings field, not by the UI.** Photon partitions
+  clients by `AppVersion` — different values connect fine and see none of each other's rooms,
+  which surfaces as "room not found" for a code that exists. PUN derives it from
+  `PhotonNetwork.GameVersion`, which `ConnectUsingSettings` reads from
+  `PhotonServerSettings.AppVersion`. That field was **empty at `41dfeb6`** (the v3 online release,
+  and what the existing APK was built from) and became **`1.0` at `3ae3d44`** — the "interactive
+  feel" UI commit. So the APK speaks `_2.55` and current builds speak `1.0_2.55`.
+
+  `PhotonMatchTransport` now pins `GameVersion` to a protocol constant, `nsolo-net-1`, immediately
+  after connecting. Bump it only when `NetProtocol`'s event codes or payload shape change — never
+  for a version number or a UI rebuild. **Both devices need one fresh build to pair again**; after
+  that, UI changes can never separate players.
+
+- **Game over, audited in play mode** by invoking `HandleGameOver(1, 12, 8)` and reading back every
+  slot. The event path itself is fine (`OnEnable` plus all four start paths subscribe). What
+  actually resolves:
+
+  | Field | Resolves to | Result |
+  |---|---|---|
+  | `gameOverTitleText` | `GameOverPanelNew/Winner` | "VICTORY" ✓ |
+  | `gameOverTimeText` | `GameOverPanelNew/Time` | "00:00" ✓ |
+  | `gameOverSummaryText` | `GameOverPanelNew/Score` | "You: 12 - 8" ✓ |
+  | `GameOverCapturesLabel` | `GameOverPanelNew/Captures` | ✓ |
+  | `GameOverRelayLabel` | `GameOverPanelNew/Relay` | ✓ |
+  | `finalPlayerCapturedText` | **null** | no `801` anywhere |
+  | `finalAiCapturedText` | **null** | no `802` anywhere |
+  | `gameOverDifficultyText` | **old** `GameOverPanel/Difficulty` | written but inactive |
+  | `gameOverVictoryCountText` | `Winner/Victory Count` | written but **switched off** |
+
+  So five of nine populate. The four that do not are structural, not wiring: the new panel has no
+  object for them. Listed in section 2 as decisions rather than bugs.
+
+---
+
 ## 2. What remains on the UI — needs your hand
 
 - [ ] **Avatar circle needs positioning.** It was placed at the `PlayerOne` placeholder's position
@@ -95,8 +140,18 @@ element(s) bound`, no "nothing to bind" warnings, no exceptions.
 - [ ] **Tutorial copy needs a read-through at size.** The words are in; whether each block fits its
       card without scrolling is a layout question I could not check.
 
-- [ ] **Game over lost the difficulty label.** `GameOverDifficultyLabel` (803) existed only on the
-      old panel. Optional — the checker does not require it.
+- [ ] **Game over: four fields have nowhere to go.** Decisions, not bugs — the new panel simply has
+      no object for each:
+      - `Victory Count` exists but is a child of `Winner` and **switched off**. Turn it on and
+        position it if you want the lifetime win count; it was off on the old panel too.
+      - **Difficulty** (`EASY` / `2 PLAYER` / `ONLINE`) has no label on the new panel, so the text
+        goes to the old one. Add a text object and tag it `GameOverDifficultyLabel` (803) if wanted.
+      - **Separate player / opponent score boxes** (`801` / `802`) do not exist on the new design;
+        the combined `Score` line covers the same information. Nothing to do unless you want them
+        split.
+
+- [ ] **Rebuild the APK on both devices before demoing online.** The version pin below means the
+      existing APK and any new build cannot see each other's rooms. One fresh build on both, once.
 
 - [ ] **Lobby cosmetics.** `LobbyHintLabel` (605) and `LobbyCopyCode` (607) untagged. Both are
       null-guarded, so they degrade silently. `LobbyShareCode` (608) works.

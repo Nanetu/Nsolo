@@ -334,9 +334,9 @@ namespace NsoloGame.Unity
             else if (hotSeat) uiManager.SetScoreSides(1, 2);
             else uiManager.SetScoreSides(aiPlayer, humanPlayer);
 
-            // The left box is the opponent's, and online is the only mode where their name is not
-            // painted into the background. Cleared in the local modes so it cannot linger.
-            uiManager.SetOpponentName(online ? networkMatch?.OpponentName : null);
+            // The left box is the opponent's. Every mode captions it now that the rebuilt HUD
+            // draws those captions as text rather than baking them into the background art.
+            uiManager.SetSeatNames(mode, online ? networkMatch?.OpponentName : null);
 
             gameState = GameState.PreGameFormation;
             uiManager.UpdateDisplay(gameBoard);
@@ -1163,7 +1163,7 @@ namespace NsoloGame.Unity
 
             // Re-asserted here as well as at setup: the nickname can still be settling when the
             // board is first drawn, and this is the last moment before play where it is free.
-            uiManager.SetOpponentName(networkMatch?.OpponentName);
+            uiManager.SetSeatNames(GameMode.Online, networkMatch?.OpponentName);
 
             uiManager.UpdateDisplay(gameBoard);
 

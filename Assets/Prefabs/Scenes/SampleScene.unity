@@ -5825,6 +5825,7 @@ GameObject:
   - component: {fileID: 74006001}
   - component: {fileID: 74006002}
   - component: {fileID: 74006003}
+  - component: {fileID: 790000920}
   m_Layer: 5
   m_Name: OpponentNameText
   m_TagString: Untagged
@@ -9207,6 +9208,7 @@ GameObject:
   - component: {fileID: 193646589}
   - component: {fileID: 193646591}
   - component: {fileID: 193646590}
+  - component: {fileID: 790000921}
   m_Layer: 5
   m_Name: PlayerNameText
   m_TagString: Untagged
@@ -47951,4 +47953,36 @@ MonoBehaviour:
   id: 412
   replaceExistingClicks: 1
   addPressFeedback: 1
+  pressShape: 0
+--- !u!114 &790000920
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 74006000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  id: 1005
+  replaceExistingClicks: 1
+  addPressFeedback: 0
+  pressShape: 0
+--- !u!114 &790000921
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 193646588}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5529b54c61b7d7540ba1eface968308c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  id: 1006
+  replaceExistingClicks: 1
+  addPressFeedback: 0
   pressShape: 0
