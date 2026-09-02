@@ -268,18 +268,52 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
-        /// Relabels the shared bottom pill. The button's own Image is transparent (the pill is
-        /// painted into the background art), so the disabled tint never shows — the label is faded
-        /// by hand instead to signal when the button is dead.
+        /// Points the bottom pill at whichever job the state calls for.
+        ///
+        /// Two shapes are supported, and which one runs depends only on whether a second button has
+        /// been tagged <see cref="ElementId.HudSecondaryAction"/>:
+        ///
+        /// One button — the original. It stays put and its label changes between START, HINT and
+        /// FORFEIT. Everything still works; the one look has to serve all three.
+        ///
+        /// Two buttons — <paramref name="isStart"/> decides which is on screen. START gets its own
+        /// object, HINT and FORFEIT share the other, and each can be styled for the job it does.
+        /// They sit in the same place, so only one is ever visible.
+        ///
+        /// The buttons' own Images are transparent where the pill is painted into the background
+        /// art, so a disabled tint would never show. The label is faded by hand instead.
         /// </summary>
-        public void SetActionButton(string label, bool interactable)
+        public void SetActionButton(string label, bool interactable, bool isStart = false)
         {
-            if (actionButton != null) actionButton.interactable = interactable;
+            Button primary = Pick(NsoloUI.Button(ElementId.HudAction), actionButton);
+            Button secondary = Pick(NsoloUI.Button(ElementId.HudSecondaryAction), secondaryActionButton);
 
-            if (actionButtonLabel == null) return;
-            actionButtonLabel.text = label;
-            Color c = actionButtonLabel.color;
-            actionButtonLabel.color = new Color(c.r, c.g, c.b, interactable ? 1f : 0.4f);
+            if (secondary == null)
+            {
+                Apply(primary, Pick(NsoloUI.Label(ElementId.HudActionLabelHint), actionButtonLabel),
+                      label, interactable, true);
+                return;
+            }
+
+            // Greyed rather than hidden once play begins: a control that vanishes and reappears
+            // between turns reads as a glitch, and the player loses the place they were reaching for.
+            Apply(primary, actionButtonLabel, label, interactable, isStart);
+            Apply(secondary, secondaryActionLabel, label, interactable, !isStart);
+        }
+
+        private static void Apply(Button button, TMP_Text label, string text, bool interactable, bool visible)
+        {
+            if (button != null)
+            {
+                if (button.gameObject.activeSelf != visible) button.gameObject.SetActive(visible);
+                button.interactable = interactable;
+            }
+
+            if (label == null) return;
+
+            label.text = text;
+            Color c = label.color;
+            label.color = new Color(c.r, c.g, c.b, interactable ? 1f : 0.4f);
         }
 
         public IEnumerator PlayMoveAnimation(GameBoard startingBoard, MoveResult moveResult)

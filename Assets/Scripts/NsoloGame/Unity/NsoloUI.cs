@@ -166,6 +166,19 @@ namespace NsoloGame.Unity
         /// </summary>
         [InspectorName("In game/Label - opponent name (left box)")] HudOpponentNameLabel = 1005,
         [InspectorName("In game/Label - your name (right box)")] HudPlayerNameLabel = 1006,
+
+        /// <summary>
+        /// The second pill that shares the first one's spot on the board.
+        ///
+        /// One button changing its own label covered all three jobs, but it could only ever wear one
+        /// look, and START and FORFEIT do not want the same one. Tagging a second button with this
+        /// splits them: <see cref="HudAction"/> is shown while the player is arranging, this one for
+        /// the rest of the game. Both press the same handler, which already knows which of the three
+        /// jobs the state calls for, so nothing downstream has to care which was tapped.
+        ///
+        /// Optional. With nothing tagged for it, the single button behaves exactly as before.
+        /// </summary>
+        [InspectorName("In game/Second action button (HINT / FORFEIT)")] HudSecondaryAction = 1007,
     }
 
     /// <summary>
@@ -538,6 +551,7 @@ namespace NsoloGame.Unity
                 case ElementId.HudUndo:
                 case ElementId.HudHint:
                 case ElementId.HudAction:
+                case ElementId.HudSecondaryAction:
                 case ElementId.HudConfirmFormation:
                     return true;
                 default:
@@ -605,6 +619,7 @@ namespace NsoloGame.Unity
                 case ElementId.HudUndo:                  return g == null ? null : (System.Action)g.UndoLastMove;
                 case ElementId.HudHint:                  return g == null ? null : (System.Action)g.RequestHint;
                 case ElementId.HudAction:                return m == null ? null : (System.Action)m.OnActionButtonPressed;
+                case ElementId.HudSecondaryAction:       return m == null ? null : (System.Action)m.OnActionButtonPressed;
                 case ElementId.HudConfirmFormation:      return g == null ? null : (System.Action)g.ConfirmFormationReady;
 
                 default: return null;
