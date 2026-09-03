@@ -330,6 +330,28 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
+        /// Photon never answered. Separate from <see cref="ShowRoomNotFound"/> because the two are
+        /// different failures and telling them apart matters: a room that cannot be found is about
+        /// the code, and a connection that never came up is not. Saying "room not found" to somebody
+        /// who was creating a room sends them looking for a code they were never given.
+        ///
+        /// <paramref name="onRetry"/> repeats whatever they were doing, rather than always landing
+        /// in the join screen.
+        /// </summary>
+        public void ShowConnectionFailed(bool wasCreating, Action onRetry, Action onMenu)
+        {
+            Hide(joinRoom);
+
+            ShowDialog(
+                "No Connection",
+                wasCreating
+                    ? "We couldn't reach the game service, so the room was not created.\n\nCheck your internet connection and try again."
+                    : "We couldn't reach the game service.\n\nCheck your internet connection and try again.",
+                new Choice("TRY AGAIN", onRetry),
+                new Choice("MAIN MENU", onMenu));
+        }
+
+        /// <summary>
         /// The match is over because the connection is. Offers a way out rather than a retry: there
         /// is no saved state to come back to in this pass, so reconnecting to the same game is not
         /// something that could work.

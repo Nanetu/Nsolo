@@ -77,6 +77,9 @@ namespace NsoloGame.Net
         /// of its own — but it is null until they actually join, and a player who never set a
         /// username arrives with an empty one, so both cases fall back rather than showing a blank.
         /// </summary>
+        /// <summary>PUN's own connection state, passed up as a label rather than a type.</summary>
+        public string ConnectionStage => PhotonNetwork.NetworkClientState.ToString();
+
         public string OpponentName
         {
             get

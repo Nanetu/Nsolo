@@ -72,10 +72,17 @@ namespace NsoloGame.Unity
         private MatchEndReason? endedReason;
 
         /// <summary>
-        /// How long to wait before deciding a connection attempt is not coming back. Photon's own
-        /// timeouts are around ten seconds, so this sits past them rather than pre-empting them.
+        /// How long the connection may sit at one stage, with no further answer, before we call it
+        /// stuck. Photon's own timeouts are around ten seconds, so this sits past them rather than
+        /// pre-empting them.
         /// </summary>
         private const float ConnectTimeoutSeconds = 15f;
+
+        /// <summary>
+        /// Which of the two the player last asked for, so a failure can name the right thing and
+        /// retry the same action instead of always offering the join screen.
+        /// </summary>
+        private bool lastAttemptWasCreate;
 
         private void Awake()
         {
@@ -204,13 +211,30 @@ namespace NsoloGame.Unity
         private void Update()
         {
             if (!connecting) return;
+
+            // Reaching a room is a march through half a dozen PUN states — name server, master,
+            // lobby, game server — and each one is a separate round trip. A flat deadline counted
+            // from the tap therefore punishes a slow link for being slow rather than for being
+            // stuck: measured here a cold connect is about 5s, but that is one good network away
+            // from 15. What actually means "stuck" is the state not moving, so the clock restarts
+            // every time it does, and only silence for that long gives up.
+            string now = Transport?.ConnectionStage ?? string.Empty;
+            if (now != lastStage)
+            {
+                lastStage = now;
+                connectingSince = Time.unscaledTime;
+                return;
+            }
+
             if (Time.unscaledTime - connectingSince < ConnectTimeoutSeconds) return;
 
-            Debug.LogWarning("OnlineFlowController: no answer from Photon within " +
-                             $"{ConnectTimeoutSeconds:0}s — giving up on this attempt.");
+            Debug.LogWarning($"OnlineFlowController: stuck in {now} for {ConnectTimeoutSeconds:0}s " +
+                             "with no further answer from Photon — giving up on this attempt.");
             SetConnecting(false);
             HandleConnectionFailed();
         }
+
+        private string lastStage = string.Empty;
 
         /// <summary>
         /// Single place the latch is set or cleared, so it can never be left on by a path that
@@ -300,6 +324,7 @@ namespace NsoloGame.Unity
         {
             if (connecting || transport == null) return;
 
+            lastAttemptWasCreate = true;
             SetConnecting(true);
             AudioManager.Click();
             Haptics.Light();
@@ -330,6 +355,7 @@ namespace NsoloGame.Unity
             GameModals.Instance.ShowJoinRoom(
                 onJoin: code =>
                 {
+                    lastAttemptWasCreate = false;
                     SetConnecting(true);
                     Transport.JoinRoom(code);
                 },
@@ -605,12 +631,24 @@ namespace NsoloGame.Unity
 
         private void HandleConnectionFailed()
         {
+            bool wasCreating = lastAttemptWasCreate;
             SetConnecting(false);
 
-            // Distinct from a match dropping: nothing was ever under way, so this is the same dead
-            // end as a bad code and gets the same dialog, which offers a retry rather than the
-            // disconnect dialog's "start a local game instead".
-            GameModals.Instance?.ShowRoomNotFound(onTryAgain: ShowJoinRoom, onMenu: LeaveOnline);
+            // Not "room not found". That wording, and its retry landing in the join screen, told a
+            // player who had just pressed CREATE ROOM that their room could not be found and then
+            // asked them for a code they were never given — which reads as the button having done
+            // the wrong thing rather than the connection having failed. Retry now repeats whichever
+            // of the two they were actually doing.
+            if (GameModals.Instance == null)
+            {
+                LeaveOnline();
+                return;
+            }
+
+            GameModals.Instance.ShowConnectionFailed(
+                wasCreating,
+                onRetry: wasCreating ? (System.Action)CreateRoom : ShowJoinRoom,
+                onMenu: LeaveOnline);
         }
 
         private void HandleMatchEnded(MatchEndReason reason)

@@ -48,6 +48,16 @@ namespace NsoloGame.Net
         /// </summary>
         string OpponentName { get; }
 
+        /// <summary>
+        /// An opaque label for how far the connection has got.
+        ///
+        /// Deliberately a string, and deliberately not interpreted: the only thing asked of it is
+        /// whether it has changed since last frame, which is how a connection still working its way
+        /// through its stages is told apart from one that has stopped answering. Keeping it opaque
+        /// is what stops the transport's own vocabulary leaking up here.
+        /// </summary>
+        string ConnectionStage { get; }
+
         /// <summary>A message arrived. The payload is protocol JSON; the transport does not read it.</summary>
         event Action<string> MessageReceived;
 
