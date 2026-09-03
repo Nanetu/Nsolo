@@ -32,7 +32,12 @@
       "Bash(git commit *)",
       "Bash(git push *)",
       "Bash(python \"C:/Users/dell/AppData/Local/Temp/claude/C--Users-dell-Nsolo/774ffb55-f71c-4a35-aa33-8d8ea4bcef8f/scratchpad/patch5.py\" --apply)",
-      "Bash(python -)"
+      "Bash(python -)",
+      "Bash(git ls-tree *)",
+      "Bash(rm -f Assets/Scripts/NsoloGame/Unity/NsoloActionProbe.cs Assets/Scripts/NsoloGame/Unity/NsoloActionProbe.cs.meta Assets/Scripts/NsoloGame/Editor/NsoloBatchCheck.cs Assets/Scripts/NsoloGame/Editor/NsoloBatchCheck.cs.meta)",
+      "Bash(git show *)",
+      "Bash(git merge *)",
+      "Bash(git branch *)"
     ],
     "deny": [],
     "ask": []
