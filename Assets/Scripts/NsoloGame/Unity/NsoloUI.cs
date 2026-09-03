@@ -18,7 +18,12 @@ namespace NsoloGame.Unity
     public enum PanelId
     {
         None = 0,
-        [InspectorName("Welcome (old first screen)")] Welcome = 1,
+        /// <summary>
+        /// The screen the main menu replaced. Nothing looks this up any more — the value is
+        /// kept because the number is what a scene stores, and reusing it would silently
+        /// retag anything still carrying it.
+        /// </summary>
+        [InspectorName("Welcome (retired - do not use)")] Welcome = 1,
         [InspectorName("Main menu")] MainMenu = 2,
         [InspectorName("Mode - vs Computer / vs Human")] Mode = 3,
         [InspectorName("Difficulty")] Difficulty = 4,
@@ -179,6 +184,20 @@ namespace NsoloGame.Unity
         /// changing its label, exactly as before.
         /// </summary>
         [InspectorName("In game/FORFEIT (two-player modes)")] HudForfeit = 1007,
+
+        /// <summary>
+        /// The game clock.
+        ///
+        /// Added because it had no id and somebody tagged it <see cref="HudPlayerNameLabel"/>
+        /// instead — the closest thing on the list. Two objects then claimed one id, and the mode
+        /// captions written on every game start had an even chance of landing on the clock.
+        /// </summary>
+        [InspectorName("In game/Label - clock")] HudTimerLabel = 1008,
+
+        [InspectorName("In game/Label - turn status")] HudStatusLabel = 1009,
+        [InspectorName("In game/Label - your score (right box)")] HudPlayerScoreLabel = 1010,
+        [InspectorName("In game/Label - opponent score (left box)")] HudOpponentScoreLabel = 1011,
+        [InspectorName("In game/Label - last move")] HudLastMoveLabel = 1012,
     }
 
     /// <summary>

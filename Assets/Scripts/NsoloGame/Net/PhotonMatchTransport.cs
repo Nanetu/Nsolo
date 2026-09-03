@@ -165,6 +165,19 @@ namespace NsoloGame.Net
             // safely assert it.
             PhotonNetwork.KeepAliveInBackground = BackgroundKeepAliveSeconds;
 
+            // Keep reading the network even if something stops the clock.
+            //
+            // PUN dispatches incoming messages from FixedUpdate, and Unity does not call
+            // FixedUpdate at all while Time.timeScale is zero — so at zero, nothing is received.
+            // Not "received late": not received. Moves, and the opponent leaving, sit in the queue
+            // unseen until the clock starts again, and then arrive all at once.
+            //
+            // Nothing in an online game is supposed to stop the clock any more — pause deliberately
+            // does not, and the in-game tips are held back entirely (TutorialCoach.Suppressed) —
+            // but "supposed to" is a poor thing to rest a connection on, and this is PUN's own
+            // switch for it. At zero the dispatch moves to LateUpdate, which Unity always calls.
+            PhotonNetwork.MinimalTimeScaleToDispatchInFixedUpdate = 0f;
+
             if (PhotonNetwork.InRoom)
             {
                 // Still holding the previous match's room — starting a second game without leaving

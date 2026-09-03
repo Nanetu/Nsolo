@@ -65,6 +65,20 @@ namespace NsoloGame.EditorTools
             { PanelId.Tutorial, new[] { ElementId.TutorialClose } },
         };
 
+        /// <summary>
+        /// What the in-game HUD is expected to answer to. Reported as a note rather than a problem:
+        /// each of these still falls back to a UIManager slot when nothing is tagged, so an
+        /// untagged HUD is a working HUD — it is simply one this check cannot vouch for.
+        /// </summary>
+        private static readonly ElementId[] HudExpected =
+        {
+            ElementId.HudPause, ElementId.HudAction,
+            ElementId.HudStatusLabel, ElementId.HudTimerLabel,
+            ElementId.HudPlayerScoreLabel, ElementId.HudOpponentScoreLabel,
+            ElementId.HudLastMoveLabel,
+            ElementId.HudOpponentNameLabel, ElementId.HudPlayerNameLabel,
+        };
+
         /// <summary>Screens that need a BACK, because there is no other way off them.</summary>
         private static readonly PanelId[] NeedBack =
         {
@@ -89,14 +103,20 @@ namespace NsoloGame.EditorTools
             report.AppendLine($"{panels.Count} tagged screen(s), {elements.Count} tagged element(s).");
             report.AppendLine();
 
+            // Screens and elements that have deliberately given up their tag. Listed together at
+            // the end so they can be found, and counted as neither working nor broken.
+            var released = new List<string>();
+
             // ── Screens ──────────────────────────────────────────────────
             var byPanelId = new Dictionary<PanelId, NsoloPanel>();
             foreach (NsoloPanel panel in panels)
             {
                 if (panel.Id == PanelId.None)
                 {
-                    report.AppendLine($"  PROBLEM  '{Path(panel.gameObject)}' has a Nsolo Panel but its Id is None. Pick which screen it is.");
-                    problems++;
+                    // Retired, not broken. A screen that has been replaced keeps its component and
+                    // gives up its id, which is what stops two panels claiming one screen while the
+                    // old one is still in the hierarchy to be looked at.
+                    released.Add(Path(panel.gameObject) + "  (whole screen)");
                     continue;
                 }
 
@@ -116,8 +136,11 @@ namespace NsoloGame.EditorTools
             {
                 if (element.Id == ElementId.None)
                 {
-                    report.AppendLine($"  PROBLEM  '{Path(element.gameObject)}' has a Nsolo Element but nothing picked. Pick what it is, or remove the component.");
-                    problems++;
+                    // Not a fault. Releasing a tag to None is how a screen is taken out of service
+                    // without deleting it — the retired panels are full of these — so it is listed
+                    // to be findable and left alone. An element that is *meant* to do something and
+                    // has nothing picked shows up the same way, which is the point of listing it.
+                    released.Add(Path(element.gameObject));
                     continue;
                 }
 
@@ -173,6 +196,28 @@ namespace NsoloGame.EditorTools
             {
                 report.AppendLine();
                 report.AppendLine($"  Not tagged yet (still using the old screens): {string.Join(", ", notRebuilt)}");
+            }
+
+            // ── The board, which is not a screen ─────────────────────────
+            // The HUD has no PanelId — it is not a panel, it lives over the board — so it would
+            // otherwise be the one part of the game this check has nothing to say about. It is
+            // also the part that was wired entirely by hand for longest, and so the part where an
+            // empty slot went unnoticed.
+            var hudMissing = new List<string>();
+            foreach (ElementId id in HudExpected)
+                if (!byElementId.ContainsKey(id)) hudMissing.Add(id.ToString());
+
+            report.AppendLine();
+            report.AppendLine(hudMissing.Count == 0
+                ? "  OK       In-game HUD"
+                : $"  NOTE     In-game HUD is untagged for: {string.Join(", ", hudMissing)} " +
+                  "(these fall back to the UIManager slots, so check those are filled)");
+
+            if (released.Count > 0)
+            {
+                report.AppendLine();
+                report.AppendLine($"  {released.Count} tagged None — inert, and normally a retired screen:");
+                foreach (string path in released) report.AppendLine($"             {path}");
             }
 
             report.AppendLine();

@@ -24,26 +24,23 @@ namespace NsoloGame.Unity
         [SerializeField] private MenuManager menuManager;
         [SerializeField] private GameController gameController;
 
-        [Header("Online panel")]
-        [Tooltip("The Create Room / Join Room screen, reached from the welcome screen.")]
-        [SerializeField] private GameObject onlinePanel;
+        // ── Screens ───────────────────────────────────────────────────────
+        // Both of these were Inspector slots, and the online one still held `OnlinePanel` — the
+        // screen `OnlineModeNew` replaced. It worked only because a startup pass silently swapped
+        // it, which is the arrangement that made a wrong slot invisible in the first place. Screens
+        // and their contents are looked up by what they are now; see NsoloPanel and NsoloElement.
+        private GameObject onlinePanel;
+        private GameObject lobbyPanel;
 
-        [Header("Lobby panel")]
-        [Tooltip("Where both players wait. Shows the room code and who is in.")]
-        [SerializeField] private GameObject lobbyPanel;
-        [SerializeField] private TMP_Text lobbyRoomCodeText;
-        [SerializeField] private TMP_Text lobbyPlayer1NameText;
-        [SerializeField] private TMP_Text lobbyPlayer2NameText;
-        [SerializeField] private TMP_Text lobbyPlayer1StatusText;
-        [SerializeField] private TMP_Text lobbyPlayer2StatusText;
-        [Tooltip("Either player. Held disabled until an opponent has joined.")]
-        [SerializeField] private Button lobbyStartButton;
-        [Tooltip("Optional. Says what the lobby is waiting for.")]
-        [SerializeField] private TMP_Text lobbyHintText;
-        [Tooltip("Optional. Copies the room code to the clipboard. Shown only while the host is still waiting for someone to join.")]
-        [SerializeField] private Button lobbyCopyCodeButton;
-        [Tooltip("Optional. Opens the Android share sheet so the code can go to WhatsApp, SMS, etc. Shown only while the host is still waiting for someone to join.")]
-        [SerializeField] private Button lobbyShareCodeButton;
+        private TMP_Text lobbyRoomCodeText;
+        private TMP_Text lobbyPlayer1NameText;
+        private TMP_Text lobbyPlayer2NameText;
+        private TMP_Text lobbyPlayer1StatusText;
+        private TMP_Text lobbyPlayer2StatusText;
+        private TMP_Text lobbyHintText;
+        private Button lobbyStartButton;
+        private Button lobbyCopyCodeButton;
+        private Button lobbyShareCodeButton;
 
         private IMatchTransport Transport => transport;
         private NetworkMatch match;
@@ -91,109 +88,46 @@ namespace NsoloGame.Unity
             if (menuManager == null) menuManager = FindObjectOfType<MenuManager>();
             if (gameController == null) gameController = FindObjectOfType<GameController>();
 
-            ResolveLobbyPanel();
-            HideScreens();
             Subscribe();
-
-            // Bound here rather than in the Inspector so these two only need dropping into their
-            // slots — one less piece of wiring to get wrong.
-            Bind(lobbyCopyCodeButton, CopyRoomCode);
-            Bind(lobbyShareCodeButton, ShareRoomCode);
-        }
-
-        private static void Bind(Button button, UnityEngine.Events.UnityAction action)
-        {
-            if (button == null) return;
-
-            button.onClick.RemoveAllListeners();
-            button.onClick.AddListener(action);
-        }
-
-        /// <summary>
-        /// Takes the lobby panel to be whichever object actually holds the lobby's contents, rather
-        /// than trusting the slot.
-        ///
-        /// Rebuilding the lobby by hand — duplicating a panel, moving the labels and buttons across,
-        /// deleting the old one — leaves the slot pointing at an empty husk while the real screen is
-        /// somewhere else. The symptom is silent and baffling: Create Room "does nothing", because
-        /// the panel being shown has nothing in it and the panel with everything in it is never
-        /// touched. The content knows where it lives, so this asks it.
-        /// </summary>
-        private void ResolveLobbyPanel()
-        {
-            if (lobbyRoomCodeText == null) return;
-
-            GameObject owner = PanelRootOf(lobbyRoomCodeText.transform);
-            if (owner == null || owner == lobbyPanel) return;
-
-            Debug.LogWarning(
-                $"OnlineFlowController: Lobby Panel was set to '{(lobbyPanel != null ? lobbyPanel.name : "none")}' " +
-                $"but the lobby's contents live under '{owner.name}'. Using '{owner.name}'. " +
-                "Update the slot to silence this.");
-
-            lobbyPanel = owner;
-        }
-
-        /// <summary>Walks up to the top-level panel — the child of the Canvas that contains this.</summary>
-        private static GameObject PanelRootOf(Transform t)
-        {
-            Canvas canvas = t.GetComponentInParent<Canvas>();
-            if (canvas == null) return null;
-
-            Transform cursor = t;
-            while (cursor.parent != null && cursor.parent != canvas.transform)
-                cursor = cursor.parent;
-
-            return cursor.parent == canvas.transform ? cursor.gameObject : null;
         }
 
         private void Start()
         {
             // After NsoloUI has built its register, which happens once every Awake has run.
-            AdoptRebuiltUI();
+            ResolveScreens();
             HideScreens();
         }
 
         /// <summary>
-        /// Points the online slots at rebuilt screens where they exist, and leaves them alone
-        /// otherwise. The counterpart of MenuManager.AdoptRebuiltUI — see there for why the wiring
-        /// runs this way round.
+        /// Looks the two online screens and their contents up by what they are.
+        ///
+        /// Every button here is bound by <see cref="NsoloElement"/> as part of the same pass, so
+        /// there is nothing to hook up: this only collects the labels and the buttons whose
+        /// visibility changes with the state of the room.
         /// </summary>
-        private void AdoptRebuiltUI()
+        private void ResolveScreens()
         {
-            GameObject rebuiltOnline = NsoloUI.Panel(PanelId.Online);
-            if (rebuiltOnline != null && rebuiltOnline != onlinePanel)
-            {
-                if (onlinePanel != null) onlinePanel.SetActive(false);
-                onlinePanel = rebuiltOnline;
-            }
+            onlinePanel = NsoloUI.Panel(PanelId.Online);
+            lobbyPanel = NsoloUI.Panel(PanelId.Lobby);
 
-            GameObject rebuiltLobby = NsoloUI.Panel(PanelId.Lobby);
-            if (rebuiltLobby != null && rebuiltLobby != lobbyPanel)
-            {
-                if (lobbyPanel != null) lobbyPanel.SetActive(false);
-                lobbyPanel = rebuiltLobby;
-            }
+            if (onlinePanel == null)
+                Debug.LogError("OnlineFlowController: no panel is tagged 'Online', so Create/Join " +
+                               "cannot open. Add an NsoloPanel to it and pick the id.");
+            if (lobbyPanel == null)
+                Debug.LogError("OnlineFlowController: no panel is tagged 'Lobby', so a created room " +
+                               "has nowhere to show its code. Add an NsoloPanel to it.");
 
-            lobbyRoomCodeText     = Pick(NsoloUI.Label(ElementId.LobbyRoomCodeLabel),      lobbyRoomCodeText);
-            lobbyPlayer1NameText  = Pick(NsoloUI.Label(ElementId.LobbyPlayer1NameLabel),   lobbyPlayer1NameText);
-            lobbyPlayer2NameText  = Pick(NsoloUI.Label(ElementId.LobbyPlayer2NameLabel),   lobbyPlayer2NameText);
-            lobbyPlayer1StatusText = Pick(NsoloUI.Label(ElementId.LobbyPlayer1StatusLabel), lobbyPlayer1StatusText);
-            lobbyPlayer2StatusText = Pick(NsoloUI.Label(ElementId.LobbyPlayer2StatusLabel), lobbyPlayer2StatusText);
-            lobbyHintText         = Pick(NsoloUI.Label(ElementId.LobbyHintLabel),          lobbyHintText);
+            lobbyRoomCodeText      = NsoloUI.Label(ElementId.LobbyRoomCodeLabel);
+            lobbyPlayer1NameText   = NsoloUI.Label(ElementId.LobbyPlayer1NameLabel);
+            lobbyPlayer2NameText   = NsoloUI.Label(ElementId.LobbyPlayer2NameLabel);
+            lobbyPlayer1StatusText = NsoloUI.Label(ElementId.LobbyPlayer1StatusLabel);
+            lobbyPlayer2StatusText = NsoloUI.Label(ElementId.LobbyPlayer2StatusLabel);
+            lobbyHintText          = NsoloUI.Label(ElementId.LobbyHintLabel);
 
-            lobbyStartButton     = Pick(NsoloUI.Button(ElementId.LobbyStart),     lobbyStartButton);
-            lobbyCopyCodeButton  = Pick(NsoloUI.Button(ElementId.LobbyCopyCode),  lobbyCopyCodeButton);
-            lobbyShareCodeButton = Pick(NsoloUI.Button(ElementId.LobbyShareCode), lobbyShareCodeButton);
-
-            // NsoloElement has already bound these two if they were tagged. Binding again would
-            // double the action, so only a button that arrived through a slot is bound here.
-            if (NsoloUI.Button(ElementId.LobbyCopyCode) == null) Bind(lobbyCopyCodeButton, CopyRoomCode);
-            if (NsoloUI.Button(ElementId.LobbyShareCode) == null) Bind(lobbyShareCodeButton, ShareRoomCode);
+            lobbyStartButton     = NsoloUI.Button(ElementId.LobbyStart);
+            lobbyCopyCodeButton  = NsoloUI.Button(ElementId.LobbyCopyCode);
+            lobbyShareCodeButton = NsoloUI.Button(ElementId.LobbyShareCode);
         }
-
-        private static T Pick<T>(T rebuilt, T current) where T : UnityEngine.Object
-            => rebuilt != null ? rebuilt : current;
 
         /// <summary>
         /// Hides both online screens without touching the connection. The menu calls this whenever
@@ -298,6 +232,8 @@ namespace NsoloGame.Unity
             // that the last match's ending cannot follow them into the next one.
             SetConnecting(false);
             endedReason = null;
+
+            HoldScreenAwake(true);
 
             menuManager?.HideAllPanelsForOnline();
             SetOnlineVisible(true);
@@ -495,7 +431,34 @@ namespace NsoloGame.Unity
             CloseMatch();
             GameModals.Instance?.HideAll();
             HideScreens();
+            HoldScreenAwake(false);
         }
+
+        /// <summary>
+        /// Keeps the display on for as long as the player is in an online session — from the
+        /// Create/Join screen until the room is given up.
+        ///
+        /// The screen going off is the thing that was ending matches. Not because Photon gives up:
+        /// the connection is held for five minutes in the background on purpose, so a player can
+        /// go and paste their room code into WhatsApp and come back. It is that a great many
+        /// Android phones drop Wi-Fi outright when the display sleeps, and a socket that has gone
+        /// is gone however patient the timeout is — so the opponent's device, correctly, reported
+        /// a player who had left. Nothing in the connection layer can fix that, because by then
+        /// there is no connection.
+        ///
+        /// This is the only mode that holds the display. A local game is being looked at by
+        /// whoever is playing it, and there is nobody on the other end of it to strand.
+        /// </summary>
+        private void HoldScreenAwake(bool hold)
+        {
+            Screen.sleepTimeout = hold ? SleepTimeout.NeverSleep : SleepTimeout.SystemSetting;
+        }
+
+        /// <summary>
+        /// Gives the display back if this component goes away mid-session — otherwise a phone left
+        /// the game while online would sit there never sleeping.
+        /// </summary>
+        private void OnDisable() => HoldScreenAwake(false);
 
         // ── Transport callbacks ───────────────────────────────────────────
 
@@ -675,6 +638,11 @@ namespace NsoloGame.Unity
                 RefreshLobby();
                 return;
             }
+
+            // Before the teardown, not after. CloseMatch unhooks the game from the match, so a
+            // controller that had not been told yet would never be told at all — see
+            // GameController.EndOnlineMatch for what that left on screen.
+            gameController?.EndOnlineMatch(reason);
 
             CloseMatch();
 

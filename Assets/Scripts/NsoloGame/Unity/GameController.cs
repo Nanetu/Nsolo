@@ -1317,9 +1317,33 @@ namespace NsoloGame.Unity
             uiManager.ShowLastMove("Re-synced with your opponent");
         }
 
-        private void HandleMatchEnded(MatchEndReason reason)
+        private void HandleMatchEnded(MatchEndReason reason) => EndOnlineMatch(reason);
+
+        /// <summary>
+        /// Stops an online game that cannot continue, and says so on the board.
+        ///
+        /// Public because the order this used to run in was wrong in a way that froze the game.
+        /// The transport raises its ending to two listeners: this controller, through
+        /// <see cref="NetworkMatch"/>, and <see cref="OnlineFlowController"/>, which put the
+        /// "opponent left" dialog up. The flow controller was subscribed first, and the first thing
+        /// it did was tear the match down — which unhooked this controller from the very event it
+        /// was waiting for. So the dialog appeared over a board that had never been told anything:
+        /// still in the opponent's turn, still answering every tap with "wait for your opponent to
+        /// move", with no opponent and no way out but force-quitting. Dismissing the dialog to look
+        /// at the final position was therefore the one thing a player must not do.
+        ///
+        /// The flow controller calls this before it cleans up now, so the board is always told
+        /// first. The subscription is kept as well, for any path that ends a match without going
+        /// through that controller, and the two are safe to double up: a game already over is left
+        /// exactly as it is.
+        /// </summary>
+        public void EndOnlineMatch(MatchEndReason reason)
         {
             if (mode != GameMode.Online) return;
+
+            // Already finished — somebody won, or somebody forfeited, or this is the second of the
+            // two reports. Whichever it is, the result on screen is the true one and stands.
+            if (gameState == GameState.GameOver) return;
 
             Log($"Online match ended: {reason}.");
 
@@ -1640,7 +1664,8 @@ namespace NsoloGame.Unity
             // online out of the win record is that those stats are keyed by AI difficulty and a
             // game played at no difficulty would make them meaningless. These three are not: time
             // at the board is time at the board, and a relay is a relay whoever was across from you.
-            ProfileManager.Instance?.RecordSessionStats(elapsed, LastGameCaptures, LastGameLongestRelay);
+            ProfileManager.Instance?.RecordSessionStats(
+                elapsed, LastGameCaptures, LastGameLongestRelay, offline: !online);
 
             AudioManager.Silence();
             // Somebody in the room won a hot-seat game, so it always gets the victory sting.

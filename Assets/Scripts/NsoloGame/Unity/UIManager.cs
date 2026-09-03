@@ -31,7 +31,6 @@ namespace NsoloGame.Unity
         [SerializeField] private bool showStartingBoardIfNoControllerRefresh = true;
 
         [Header("HUD — Status")]
-        [SerializeField] private Canvas hudCanvas;
         [SerializeField] private TMP_Text turnStatusText;
         [SerializeField] private TMP_Text timerText;
 
@@ -62,7 +61,6 @@ namespace NsoloGame.Unity
         [SerializeField] private TMP_Text actionButtonLabel;
 
         [Header("Highlighting")]
-        [SerializeField] private Color normalColor = Color.white;
         [SerializeField] private Color legalMoveColor = new Color(1f, 0.85f, 0.05f);
         [SerializeField] private Color illegalMoveColor = Color.red;
 
@@ -107,8 +105,39 @@ namespace NsoloGame.Unity
         {
             Log("Start()");
 
+            // After NsoloUI has built its register — see NsoloUI.Bootstrap for why that cannot
+            // happen in Awake.
+            AdoptRebuiltUI();
+
             if (showStartingBoardIfNoControllerRefresh)
                 StartCoroutine(SpawnStartingBoardFallbackNextFrame());
+        }
+
+        /// <summary>
+        /// Points every HUD reference at whatever has been tagged for it, keeping the slot's
+        /// contents otherwise. The counterpart of the same pass in MenuManager and ProfileManager.
+        ///
+        /// The HUD was the last part of the game still wired entirely by hand, which is why it was
+        /// also the part with slots nobody had noticed were empty. Two of its labels — the two pill
+        /// captions — are found inside their own button when the slot is blank, so they were never
+        /// worth filling; the rest now answer to a tag, and a tag can be checked by
+        /// <c>Nsolo &gt; Check UI Wiring</c> without play mode.
+        /// </summary>
+        private void AdoptRebuiltUI()
+        {
+            turnStatusText  = Pick(NsoloUI.Label(ElementId.HudStatusLabel),        turnStatusText);
+            timerText       = Pick(NsoloUI.Label(ElementId.HudTimerLabel),         timerText);
+            playerScoreText = Pick(NsoloUI.Label(ElementId.HudPlayerScoreLabel),   playerScoreText);
+            aiScoreText     = Pick(NsoloUI.Label(ElementId.HudOpponentScoreLabel), aiScoreText);
+            lastMoveText    = Pick(NsoloUI.Label(ElementId.HudLastMoveLabel),      lastMoveText);
+
+            opponentNameText = Pick(NsoloUI.Label(ElementId.HudOpponentNameLabel), opponentNameText);
+            playerNameText   = Pick(NsoloUI.Label(ElementId.HudPlayerNameLabel),   playerNameText);
+
+            undoButton   = Pick(NsoloUI.Button(ElementId.HudUndo),    undoButton);
+            actionButton = Pick(NsoloUI.Button(ElementId.HudAction),  actionButton);
+            hintButton   = Pick(NsoloUI.Button(ElementId.HudHint),    hintButton);
+            forfeitButton = Pick(NsoloUI.Button(ElementId.HudForfeit), forfeitButton);
         }
 
         private void InitializeBoardUI()
@@ -289,8 +318,8 @@ namespace NsoloGame.Unity
         /// <summary>
         /// Points the bottom pill at whichever job the state calls for.
         ///
-        /// Two shapes are supported, and which one runs depends only on whether a second button has
-        /// been tagged <see cref="ElementId.HudSecondaryAction"/>:
+        /// Two shapes are supported, and which one runs depends only on whether a second pill has
+        /// been tagged <see cref="ElementId.HudHint"/> or <see cref="ElementId.HudForfeit"/>:
         ///
         /// One button — the original. It stays put and its label changes between START, HINT and
         /// FORFEIT. Everything still works; the one look has to serve all three.
@@ -304,9 +333,9 @@ namespace NsoloGame.Unity
         /// </summary>
         public void SetActionButton(string label, bool interactable, HudActionRole role = HudActionRole.Start)
         {
-            Button start = Pick(NsoloUI.Button(ElementId.HudAction), actionButton);
-            Button hint = Pick(NsoloUI.Button(ElementId.HudHint), hintButton);
-            Button forfeit = Pick(NsoloUI.Button(ElementId.HudForfeit), forfeitButton);
+            Button start = actionButton;
+            Button hint = hintButton;
+            Button forfeit = forfeitButton;
 
             if (hint == null && forfeit == null)
             {
@@ -481,8 +510,8 @@ namespace NsoloGame.Unity
         /// </summary>
         public void SetSeatNames(GameMode mode, string opponentName = null)
         {
-            TMP_Text opponent = Pick(NsoloUI.Label(ElementId.HudOpponentNameLabel), opponentNameText);
-            TMP_Text player = Pick(NsoloUI.Label(ElementId.HudPlayerNameLabel), playerNameText);
+            TMP_Text opponent = opponentNameText;
+            TMP_Text player = playerNameText;
 
             string opponentCaption;
             string playerCaption;

@@ -45,6 +45,17 @@ namespace NsoloGame.Unity
         /// <summary>Longest relay ever pulled off: the most laps one move turned into.</summary>
         public int longestRelay;
 
+        /// <summary>
+        /// Games finished offline — against the computer or across one device. Counts finishes,
+        /// not wins, and not online games.
+        ///
+        /// This is what unlocks online play. It is its own field rather than a reading of
+        /// <see cref="gamesPlayed"/> because that one is the AI record and does not count
+        /// hot-seat, and somebody who learned the game on one phone with a friend has plainly
+        /// learned the game. See ProfileManager.HasPlayedOffline.
+        /// </summary>
+        public int offlineGamesFinished;
+
         // Achievements, once earned, stay earned even if the underlying stat later regresses
         // (e.g. a win streak dropping back below the threshold), so they're stored explicitly.
         public bool firstWinUnlocked;
@@ -84,20 +95,16 @@ namespace NsoloGame.Unity
 
     public class ProfileManager : MonoBehaviour
     {
-        [Header("Profile Panel UI")]
-        [SerializeField] private TMP_Text usernameText;
-        [SerializeField] private TMP_Text gamesPlayedText;
-        [SerializeField] private TMP_Text gamesWonText;
-        [SerializeField] private TMP_Text winRateText;
-        [SerializeField] private TMP_Text shortestWinText;
-        [SerializeField] private TMP_Text easyWinsText;
-        [SerializeField] private TMP_Text hardWinsText;
-        [SerializeField] private TMP_Text breakdownText;
+        // ── Profile page ──────────────────────────────────────────────────
+        // Not serialized, and deliberately so. These were eight Inspector slots and every one of
+        // them still pointed at the labels on the *old* profile screen, which the rebuilt page
+        // replaced — so the page the player was looking at got its figures from a second pass
+        // through the register while this set quietly wrote the same numbers onto a screen that
+        // never opens. Both halves are the register's now, and there is one place a figure goes.
+        private TMP_Text usernameText;
+        private TMP_InputField usernameInput;
 
         [Header("Username Editing")]
-        [Tooltip("Optional. If assigned, the Edit button focuses this field and submitting it saves " +
-                 "the name. If left empty, the device's on-screen keyboard is opened directly.")]
-        [SerializeField] private TMP_InputField usernameInput;
         [SerializeField] private int maxUsernameLength = 16;
 
         [Header("Achievements")]
@@ -144,6 +151,17 @@ namespace NsoloGame.Unity
         /// <summary>Lifetime wins, for the game-over panel's victory counter.</summary>
         public int GamesWon => profile?.gamesWon ?? 0;
 
+        /// <summary>
+        /// Whether this player has finished at least one game offline, and so may play online.
+        ///
+        /// Online is the one mode where not knowing the rules costs somebody else something. A
+        /// first-timer online spends the game reading the tutorial while a real person waits on
+        /// their move — and since the tips are held back online (see TutorialCoach.Suppressed),
+        /// there would be nothing to read there anyway. One finished game against the computer is
+        /// the whole requirement.
+        /// </summary>
+        public bool HasPlayedOffline => (profile?.offlineGamesFinished ?? 0) > 0;
+
         /// <summary>The saved display name, for any screen that wants to greet the player.</summary>
         public string Username => profile?.username;
 
@@ -183,19 +201,12 @@ namespace NsoloGame.Unity
         /// </summary>
         private void AdoptRebuiltUI()
         {
-            usernameText     = Pick(NsoloUI.Label(ElementId.ProfileUsernameLabel),    usernameText);
-            gamesPlayedText  = Pick(NsoloUI.Label(ElementId.ProfileGamesPlayedLabel), gamesPlayedText);
-            gamesWonText     = Pick(NsoloUI.Label(ElementId.ProfileGamesWonLabel),    gamesWonText);
-            winRateText      = Pick(NsoloUI.Label(ElementId.ProfileWinRateLabel),     winRateText);
-            shortestWinText  = Pick(NsoloUI.Label(ElementId.ProfileShortestWinLabel), shortestWinText);
-            easyWinsText     = Pick(NsoloUI.Label(ElementId.ProfileEasyWinsLabel),    easyWinsText);
-            hardWinsText     = Pick(NsoloUI.Label(ElementId.ProfileHardWinsLabel),    hardWinsText);
-            breakdownText    = Pick(NsoloUI.Label(ElementId.ProfileBreakdownLabel),   breakdownText);
+            usernameText  = NsoloUI.Label(ElementId.ProfileUsernameLabel);
+            usernameInput = NsoloUI.InputField(ElementId.ProfileUsernameInput);
 
-            usernameInput  = Pick(NsoloUI.InputField(ElementId.ProfileUsernameInput),  usernameInput);
-            avatarIcon     = Pick(NsoloUI.Image(ElementId.ProfileAvatarIcon),          avatarIcon);
-            avatarMonogram = Pick(NsoloUI.Label(ElementId.ProfileAvatarMonogram),      avatarMonogram);
-            avatarButton   = Pick(NsoloUI.Button(ElementId.ProfileAvatarButton),       avatarButton);
+            avatarIcon     = Pick(NsoloUI.Image(ElementId.ProfileAvatarIcon),     avatarIcon);
+            avatarMonogram = Pick(NsoloUI.Label(ElementId.ProfileAvatarMonogram), avatarMonogram);
+            avatarButton   = Pick(NsoloUI.Button(ElementId.ProfileAvatarButton),  avatarButton);
         }
 
         private static T Pick<T>(T rebuilt, T current) where T : UnityEngine.Object
@@ -218,6 +229,12 @@ namespace NsoloGame.Unity
             // Backfill unlock flags from existing stats so profiles saved before achievements
             // existed still light up whatever they've already earned.
             EvaluateAchievements();
+
+            // Same for the online unlock, which is newer than most saves. A player with games
+            // against the computer behind them has served the apprenticeship the counter exists to
+            // measure, and should not be sent back to the start of it by an update.
+            if (profile.offlineGamesFinished == 0 && profile.gamesPlayed > 0)
+                profile.offlineGamesFinished = profile.gamesPlayed;
         }
 
         private void Save()
@@ -266,9 +283,14 @@ namespace NsoloGame.Unity
         /// three totals have no such axis, so excluding those modes would just make them wrong in
         /// the other direction: hours at the board that the profile pretends never happened.
         /// </summary>
-        public void RecordSessionStats(float elapsedSeconds, int stonesCaptured, int longestRelay)
+        public void RecordSessionStats(float elapsedSeconds, int stonesCaptured, int longestRelay,
+                                       bool offline = false)
         {
             if (profile == null) return;
+
+            // Counts finishes rather than wins: the point is that the player has been through a
+            // whole game once, not that they were any good at it.
+            if (offline) profile.offlineGamesFinished++;
 
             if (elapsedSeconds > 0f) profile.totalPlaytimeSeconds += elapsedSeconds;
 
@@ -282,6 +304,13 @@ namespace NsoloGame.Unity
             if (longestRelay > profile.longestRelay) profile.longestRelay = longestRelay;
 
             Save();
+        }
+
+        /// <summary>The fastest win as mm:ss, or a blank dial when there has not been one.</summary>
+        private static string FormatShortestWin(float seconds)
+        {
+            if (seconds >= float.MaxValue) return "--:--";
+            return $"{(int)(seconds / 60):00}:{(int)(seconds % 60):00}";
         }
 
         /// <summary>Career playtime as the profile page shows it: "3h 24m", or "12m" under an hour.</summary>
@@ -374,57 +403,24 @@ namespace NsoloGame.Unity
             if (usernameText != null)
                 usernameText.text = profile.username;
 
-            if (gamesPlayedText != null)
-                gamesPlayedText.text = $"{profile.gamesPlayed}";
-
-            if (gamesWonText != null)
-                gamesWonText.text = $"{profile.gamesWon}";
-
-            if (winRateText != null)
-            {
-                float rate = profile.gamesPlayed > 0
-                    ? (float)profile.gamesWon / profile.gamesPlayed * 100f
-                    : 0f;
-                winRateText.text = $"{Mathf.RoundToInt(rate)}%";
-            }
-
-            if (shortestWinText != null)
-            {
-                if (profile.shortestWinSeconds >= float.MaxValue)
-                    shortestWinText.text = "--:--";
-                else
-                {
-                    int m = (int)(profile.shortestWinSeconds / 60);
-                    int s = (int)(profile.shortestWinSeconds % 60);
-                    shortestWinText.text = $"{m:00}:{s:00}";
-                }
-            }
-
-            if (easyWinsText != null)
-                easyWinsText.text = $"{profile.easyWins}";
-
-            if (hardWinsText != null)
-                hardWinsText.text = $"{profile.hardWins}";
-
-            if (breakdownText != null)
-                breakdownText.text =
-                    $" Easy: {profile.easyWins}W/{profile.easyLosses}L"+
-                    $"          Medium: {profile.mediumWins}W/{profile.mediumLosses}L"+
-                    $"       Hard: {profile.hardWins}W/{profile.hardLosses}L";
-
             RefreshCareerStats();
             RefreshAchievements();
             ApplyAvatar();
         }
 
         /// <summary>
-        /// Writes the rebuilt profile page's six stat cards and three breakdown rows.
+        /// Writes every figure on the profile page.
         ///
-        /// These go through the register rather than through serialized slots, because each card is
-        /// a single label carrying its own heading — "MATCHES", "BEST STREAK" — and
-        /// <see cref="NsoloUI.SetValue"/> keeps that heading and adds only the figure. Nothing here
-        /// needs to know what the cards are called, which is the point: renaming one in the
-        /// Inspector cannot break it.
+        /// All of it goes through the register, because each card is a single label carrying its
+        /// own heading — "MATCHES", "BEST STREAK" — and <see cref="NsoloUI.SetValue"/> keeps that
+        /// heading and adds only the figure. Nothing here needs to know what the cards are called,
+        /// which is the point: renaming one in the Inspector cannot break it.
+        ///
+        /// The last three are the figures the old screen showed that the rebuilt one has not been
+        /// given a card for yet — total wins, fastest win, and the one-line difficulty breakdown.
+        /// They are written unconditionally and land nowhere until something is tagged with their
+        /// id, which is the whole point: the number has somewhere to go the moment a label wants
+        /// it, and no code has to change to put it there.
         /// </summary>
         private void RefreshCareerStats()
         {
@@ -437,6 +433,16 @@ namespace NsoloGame.Unity
             NsoloUI.SetValue(ElementId.ProfileTotalPlaytimeLabel, FormatPlaytime(profile.totalPlaytimeSeconds));
             NsoloUI.SetValue(ElementId.ProfileStonesCapturedLabel, profile.mostStonesInAGame.ToString());
             NsoloUI.SetValue(ElementId.ProfileLongestRelayLabel, profile.longestRelay.ToString());
+
+            NsoloUI.SetValue(ElementId.ProfileGamesPlayedLabel, played.ToString());
+            NsoloUI.SetValue(ElementId.ProfileGamesWonLabel, profile.gamesWon.ToString());
+            NsoloUI.SetValue(ElementId.ProfileShortestWinLabel, FormatShortestWin(profile.shortestWinSeconds));
+            NsoloUI.SetValue(ElementId.ProfileEasyWinsLabel, profile.easyWins.ToString());
+            NsoloUI.SetValue(ElementId.ProfileHardWinsLabel, profile.hardWins.ToString());
+            NsoloUI.SetValue(ElementId.ProfileBreakdownLabel,
+                $"Easy: {profile.easyWins}W/{profile.easyLosses}L    " +
+                $"Medium: {profile.mediumWins}W/{profile.mediumLosses}L    " +
+                $"Hard: {profile.hardWins}W/{profile.hardLosses}L");
 
             // One line each, so these read across rather than stacking like the cards do.
             NsoloUI.SetValue(ElementId.ProfileBreakdownEasyLabel,

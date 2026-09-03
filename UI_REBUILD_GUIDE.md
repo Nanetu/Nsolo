@@ -66,11 +66,16 @@ That's it for that button. Repeat for the rest.
 Untick the checkbox next to the panel's name at the top of the Inspector, so it starts hidden.
 The game switches on whichever screen it needs.
 
-### Step 5 — Leave the old panel exactly where it is
+### Step 5 — Retire the old panel
 
-**Do not delete the old screen yet.** The moment your new one is tagged, the game uses yours and
-switches the old one off by itself. You'll see a line in the Console saying so. Deleting comes
-later, once everything is tested.
+Find the **Nsolo Panel** on the screen yours replaces and set its Id to **None**, and do the same
+for any **Nsolo Element** on its buttons and labels. That is all "retiring" means: the old screen
+stays in the hierarchy where you can look at it, and stops answering to anything.
+
+Two panels claiming one Id is the one mistake that matters here — the register picks whichever it
+finds first, which is an accident of hierarchy order, so half the game ends up talking to a screen
+nobody can see. **Nsolo → Check UI Wiring** reports it, and lists everything tagged None so you can
+see at a glance what has been retired.
 
 ### Step 6 — Check your work
 
@@ -158,6 +163,11 @@ the game copes without it.
 > The **achievement badges** and the **list of avatar pictures** are the two things still done the
 > old way, in the ProfileManager slots. They're content, not wiring — which badge means what is a
 > decision no dropdown can make. Leave those slots as they are.
+
+> **Games won**, **fastest win**, **easy wins**, **hard wins** and the one-line **breakdown** are
+> written every time the page opens, whether or not anything is tagged to receive them. The rebuilt
+> page has no card for them yet; add one, tag it, and the figure appears. Nothing in the code needs
+> to change.
 
 ### Online (Create / Join)
 | Object | Pick |
@@ -287,8 +297,17 @@ They're there for odd cases. Defaults are right almost always.
 1. Run **Nsolo → Check UI Wiring** one last time. Aim for "No problems found."
 2. Press Play and walk the whole game: menu → mode → difficulty → play → pause → resume → quit to
    menu → profile → tutorial → online → lobby.
-3. **Then** delete the old panels. Not before.
+3. **Then** delete the old panels, if you want them gone. Not before.
 4. Save the scene.
 
-Leave the deleting until we're next working together if you'd rather — that and clearing out the
-now-unused code is exactly what the next session is for.
+Deleting is optional now. No script holds a reference to any retired screen — every screen and
+every label is found by its tag — so the old panels cost nothing but hierarchy clutter, and they
+are useful to keep around while there is still art to compare against.
+
+## The in-game HUD
+
+The HUD is not a panel and has no Id of its own, but its parts are tagged the same way, under
+`In game/`: PAUSE, UNDO, HINT, the main action pill, FORFEIT, the two name captions, the two score
+figures, the turn status line, the clock, and the last-move line. **Check UI Wiring** reports on it
+as a group. Anything left untagged falls back to the matching slot on `BoardUI`'s UIManager, so an
+untagged HUD still works — the check simply cannot vouch for it.

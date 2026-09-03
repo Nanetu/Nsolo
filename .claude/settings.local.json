@@ -37,7 +37,9 @@
       "Bash(rm -f Assets/Scripts/NsoloGame/Unity/NsoloActionProbe.cs Assets/Scripts/NsoloGame/Unity/NsoloActionProbe.cs.meta Assets/Scripts/NsoloGame/Editor/NsoloBatchCheck.cs Assets/Scripts/NsoloGame/Editor/NsoloBatchCheck.cs.meta)",
       "Bash(git show *)",
       "Bash(git merge *)",
-      "Bash(git branch *)"
+      "Bash(git branch *)",
+      "Bash(python \"C:/Users/dell/AppData/Local/Temp/claude/C--Users-dell-Nsolo/774ffb55-f71c-4a35-aa33-8d8ea4bcef8f/scratchpad/addvalues.py\")",
+      "Bash(python \"C:/Users/dell/AppData/Local/Temp/claude/C--Users-dell-Nsolo/774ffb55-f71c-4a35-aa33-8d8ea4bcef8f/scratchpad/addvalues.py\" --apply)"
     ],
     "deny": [],
     "ask": []

@@ -227,3 +227,76 @@ Recorded so it is not rediscovered from scratch. None of it blocks the defense.
 A false alarm worth not re-investigating: the lobby START button's inspector slot is empty by
 design. `id: 606` is tagged in the scene and `OnlineFlowController.cs:178` resolves it at runtime.
 Empty slots are normal throughout this layer.
+
+---
+
+## Cleanup pass — 2026-09-03
+
+Verified against Unity 2022.3.62f3 in batch mode: scripts compile with no errors and no warnings,
+`Nsolo → Check UI Wiring` reports **no problems**, and play mode boots clean
+(`NsoloUI: 9 tagged panel(s), 83 tagged element(s) bound`, no exceptions, board spawns).
+
+### No script references a retired screen any more
+
+Every controller used to reach its screens through Inspector slots, and a startup pass then
+overwrote those slots with the tagged panel where one existed. That scaffolding was for a rebuild
+happening one screen at a time. It had outlived its purpose and become the problem: **every slot in
+the scene still held the old panel**, so the Inspector said one thing and the running game did
+another, and a slot nobody had re-dragged looked exactly like one that had been.
+
+Screens and their contents are now looked up by what they are. Slots removed:
+
+| Component | Slots removed | Was pointing at |
+|---|---|---|
+| MenuManager | 34 | `WelcomePanel`, `ModePanel`, `DifficultyPanel`, `ProfilePanel`, `PausePanel`, `GameOverPanel`, `TutorialPanel` and their labels |
+| ProfileManager | 9 | `ProfilePanel`'s eight labels and its name box |
+| OnlineFlowController | 11 | `OnlinePanel`, and the lobby's labels and buttons |
+| UIManager | 2 | `hudCanvas` and `normalColor`, both unread |
+
+MenuManager keeps three slots (`gameController`, `gameplayRoot`, `onlineFlow`), ProfileManager keeps
+its avatar and achievement **content**, and UIManager keeps its HUD slots as the fallback behind the
+new tags. The retired panels remain in the hierarchy with their tags released to None.
+
+### The background swap is gone
+
+`ApplyGameplayChrome` switched between three background images, one per mode. That was right while
+each background had its captions and its Undo pill painted into the artwork — the picture *was* the
+HUD. It stopped being right when the HUD became real objects over one background: the two-player and
+online modes switched `BackgroundPanelNew` **off** and an older picture **on**, leaving the new HUD
+laid out over art it was never measured against. That is the layering both two-player modes showed.
+
+It now sets one thing: whether there is an Undo button. (Which never worked either — `undoButtonObject`
+was empty, so Undo stayed live and invisible in two-player games. It goes through `HudUndo` now.)
+
+### Scene fixes
+
+- `HUDRoot/Time/Time` — the static "TIME: " caption — was tagged `HudPlayerNameLabel`, the same id as
+  the real name label. Two objects, one id: the mode captions written at every game start had an even
+  chance of landing on the clock's caption. Released to None.
+- The HUD's five unlabelled parts got ids of their own and were tagged: status, clock, both score
+  figures, last move. `Check UI Wiring` now covers the HUD.
+
+### Online
+
+- **The disconnect freeze is fixed.** `OnlineFlowController` was subscribed to the transport's
+  ending ahead of `GameController` and tore the match down first — which unhooked the controller
+  from the event it was waiting for, so the board was never told. The "opponent left" dialog went up
+  over a live game still in the opponent's turn, and dismissing it to look at the final position
+  left a board that answered every tap with "wait for your opponent to move". It calls
+  `GameController.EndOnlineMatch` before cleaning up now; the call is idempotent.
+- **Tips are held back online** (`TutorialCoach.Suppressed`). A modal tip sets `Time.timeScale` to
+  zero, which stops this device's clock while the opponent's runs on — and stops PUN dispatching, so
+  the opponent's moves queue up unseen. Suppressed tips are not marked as shown, so they are still
+  waiting the next time the player is offline.
+- **The screen is held awake for the length of an online session.** Photon holds the connection for
+  five minutes in the background on purpose, but many Android phones drop Wi-Fi outright when the
+  display sleeps, and no timeout survives the socket going away.
+- **Online is locked until one game has been finished offline** (`ProfileManager.HasPlayedOffline`,
+  backfilled for existing saves). Tapping the card explains why and offers the computer.
+
+### Still open
+
+**Reconnect.** `PlayerTtl` and `EmptyRoomTtl` are still zero, so a player the server drops is gone
+for good and their seat with them. Holding the seat open and letting them rejoin needs the host to
+rebroadcast the board on arrival — `NetworkMatch` already has the message for it — plus a "waiting
+for your opponent" state with a grace period. Untested territory that wants two real devices.
