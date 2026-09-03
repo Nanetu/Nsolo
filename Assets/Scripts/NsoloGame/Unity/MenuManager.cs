@@ -388,7 +388,21 @@ namespace NsoloGame.Unity
         public void SelectVsHuman() => ApplyModeSelection(ModeVsHuman);
 
         /// <summary>Mode panel: the Play Online card. Selects, it does not connect.</summary>
-        public void SelectOnline() => ApplyModeSelection(ModeOnline);
+        public void SelectOnline()
+        {
+            ApplyModeSelection(ModeOnline);
+
+            // Start reaching Photon a screen early. Picking the card is the first moment we know
+            // the player is heading online, and getting to a lobby is around two seconds of the
+            // roughly three that Create Room takes — so spending it while they are still looking
+            // for CONTINUE is two seconds they never see. Prewarm is idempotent and returns at once
+            // if a connection is already up, so tapping the card repeatedly costs nothing.
+            //
+            // Still nothing for a player who never comes here: no connection is opened until this
+            // card is chosen.
+            ResolveOnlineFlow();
+            onlineFlow?.PrewarmConnection();
+        }
 
         /// <summary>
         /// Mode panel: CONTINUE. vs Computer goes on to pick a difficulty; vs Human has no

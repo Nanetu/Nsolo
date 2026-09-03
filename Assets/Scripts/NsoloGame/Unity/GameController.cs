@@ -389,10 +389,12 @@ namespace NsoloGame.Unity
             if (mode == GameMode.Online)
             {
                 // Live on your own turn only. Conceding while the opponent's move is still being
-                // animated would land a forfeit in the middle of their turn resolving.
+                // animated would land a forfeit in the middle of their turn resolving — and online
+                // it would race the host, which is the one place the result has to be unambiguous.
                 uiManager?.SetActionButton(
                     arranging ? ActionLabelStart : ActionLabelForfeit,
-                    arranging || gameState == GameState.OnlineLocalTurn);
+                    arranging || gameState == GameState.OnlineLocalTurn,
+                    arranging ? HudActionRole.Start : HudActionRole.Forfeit);
                 return;
             }
 
@@ -400,13 +402,15 @@ namespace NsoloGame.Unity
             {
                 uiManager?.SetActionButton(
                     arranging ? ActionLabelStart : ActionLabelForfeit,
-                    arranging || gameState == GameState.HotSeatTurn);
+                    arranging || gameState == GameState.HotSeatTurn,
+                    arranging ? HudActionRole.Start : HudActionRole.Forfeit);
                 return;
             }
 
             uiManager?.SetActionButton(
                 arranging ? ActionLabelStart : ActionLabelHint,
-                arranging || gameState == GameState.HumanTurn);
+                arranging || gameState == GameState.HumanTurn,
+                arranging ? HudActionRole.Start : HudActionRole.Hint);
         }
 
         // ── Pre-Game Formation Phase ─────────────────────────────────────────

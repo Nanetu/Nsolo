@@ -285,6 +285,16 @@ namespace NsoloGame.Unity
             Transport.Prewarm();
         }
 
+        /// <summary>
+        /// Opens the connection without opening the screen, for callers that know the player is
+        /// heading online before the Create/Join panel is up. Safe to call repeatedly.
+        /// </summary>
+        public void PrewarmConnection()
+        {
+            if (transport == null) return;
+            Transport.Prewarm();
+        }
+
         /// <summary>Wire to the online panel's CREATE ROOM card.</summary>
         public void CreateRoom()
         {

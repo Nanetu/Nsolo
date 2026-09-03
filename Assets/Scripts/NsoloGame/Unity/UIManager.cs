@@ -8,6 +8,18 @@ using NsoloGame.Core;
 
 namespace NsoloGame.Unity
 {
+    /// <summary>
+    /// Which of the three jobs the bottom pill is doing. Named rather than inferred from the label,
+    /// so the words on the button stay a presentation detail and can be changed or translated
+    /// without silently repointing which button appears.
+    /// </summary>
+    public enum HudActionRole
+    {
+        Start,
+        Hint,
+        Forfeit,
+    }
+
     public class UIManager : MonoBehaviour
     {
         [Header("Board")]
@@ -37,9 +49,16 @@ namespace NsoloGame.Unity
 
         [Header("HUD — Buttons")]
         [SerializeField] private Button undoButton;
-        [Tooltip("The bottom-centre pill. It doubles as START while the player is arranging their " +
-                 "stones and as HINT once play begins, so both share one spot on the background art.")]
+        [Tooltip("The bottom-centre pill. On its own it doubles as START, HINT and FORFEIT. With a " +
+                 "second button tagged below, this one is the START half.")]
         [SerializeField] private Button actionButton;
+        [Tooltip("Optional HINT pill sharing the action pill's spot, so it can be styled apart from " +
+                 "START. Normally found by its tag rather than dragged in here.")]
+        [SerializeField] private Button hintButton;
+        [SerializeField] private TMP_Text hintLabel;
+        [Tooltip("Optional FORFEIT pill, same spot again, for the two-player modes.")]
+        [SerializeField] private Button forfeitButton;
+        [SerializeField] private TMP_Text forfeitLabel;
         [SerializeField] private TMP_Text actionButtonLabel;
 
         [Header("Highlighting")]
@@ -283,22 +302,42 @@ namespace NsoloGame.Unity
         /// The buttons' own Images are transparent where the pill is painted into the background
         /// art, so a disabled tint would never show. The label is faded by hand instead.
         /// </summary>
-        public void SetActionButton(string label, bool interactable, bool isStart = false)
+        public void SetActionButton(string label, bool interactable, HudActionRole role = HudActionRole.Start)
         {
-            Button primary = Pick(NsoloUI.Button(ElementId.HudAction), actionButton);
-            Button secondary = Pick(NsoloUI.Button(ElementId.HudSecondaryAction), secondaryActionButton);
+            Button start = Pick(NsoloUI.Button(ElementId.HudAction), actionButton);
+            Button hint = Pick(NsoloUI.Button(ElementId.HudHint), hintButton);
+            Button forfeit = Pick(NsoloUI.Button(ElementId.HudForfeit), forfeitButton);
 
-            if (secondary == null)
+            if (hint == null && forfeit == null)
             {
-                Apply(primary, Pick(NsoloUI.Label(ElementId.HudActionLabelHint), actionButtonLabel),
-                      label, interactable, true);
+                // Nothing else tagged, so the original one-pill behaviour: always on screen,
+                // relabelled between START, HINT and FORFEIT.
+                Apply(start, LabelFor(start, actionButtonLabel), label, interactable, true);
                 return;
             }
 
-            // Greyed rather than hidden once play begins: a control that vanishes and reappears
-            // between turns reads as a glitch, and the player loses the place they were reaching for.
-            Apply(primary, actionButtonLabel, label, interactable, isStart);
-            Apply(secondary, secondaryActionLabel, label, interactable, !isStart);
+            // A half-finished setup — say HINT built but FORFEIT not yet — must not leave the board
+            // with no pill at all, so a missing button falls back to the one that is always there.
+            Button wanted = role == HudActionRole.Hint ? hint
+                          : role == HudActionRole.Forfeit ? forfeit
+                          : start;
+            if (wanted == null) wanted = start;
+
+            Apply(start, LabelFor(start, actionButtonLabel), label, interactable, start == wanted);
+            Apply(hint, LabelFor(hint, hintLabel), label, interactable, hint == wanted);
+            Apply(forfeit, LabelFor(forfeit, forfeitLabel), label, interactable, forfeit == wanted);
+        }
+
+        /// <summary>
+        /// The label a pill writes into: whatever was dragged into the slot, else the TMP_Text the
+        /// button already carries. Duplicating a button brings its label along, so looking inside
+        /// saves wiring a slot for the copy — and a pill with no text at all is still valid, since
+        /// the word can be part of the artwork.
+        /// </summary>
+        private static TMP_Text LabelFor(Button button, TMP_Text assigned)
+        {
+            if (assigned != null) return assigned;
+            return button == null ? null : button.GetComponentInChildren<TMP_Text>(true);
         }
 
         private static void Apply(Button button, TMP_Text label, string text, bool interactable, bool visible)
