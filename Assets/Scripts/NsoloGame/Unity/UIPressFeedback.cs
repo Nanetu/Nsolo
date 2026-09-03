@@ -49,12 +49,29 @@ namespace NsoloGame.Unity
 
         [SerializeField] private float idleSeconds = 2.6f;
 
+        [Header("Glow fit")]
+        [Tooltip("Grows (or with negative numbers, shrinks) the glow relative to the button, in " +
+                 "screen pixels. Per button, so a pill whose artwork does not fill its hitbox can " +
+                 "be tightened without touching any other. Ignored once a PressLayer child is " +
+                 "authored in the scene — then the object's own rect is the truth.")]
+        [SerializeField] private Vector2 glowPadding = Vector2.zero;
+
+        [Tooltip("Nudges the glow off centre, in screen pixels. Same rules as the padding.")]
+        [SerializeField] private Vector2 glowOffset = Vector2.zero;
+
         private RectTransform rect;
         private Vector3 homeScale = Vector3.one;
         private Button button;
         private Image layer;
         private Coroutine motion;
         private bool held;
+
+        /// <summary>
+        /// True when the layer was found in the scene rather than built here, in which case its
+        /// transform is left exactly as authored. Somebody who has placed the object by hand has
+        /// said something more specific than any rule this component could apply.
+        /// </summary>
+        private bool layerIsAuthored;
 
         private bool Available => button == null || button.interactable;
 
@@ -69,11 +86,25 @@ namespace NsoloGame.Unity
             homeScale = transform.localScale;
             button = GetComponent<Button>();
 
-            var go = new GameObject("PressLayer", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-            var layerRect = (RectTransform)go.transform;
-            layerRect.SetParent(rect, false);
+            // A PressLayer put in the scene by hand wins. Building one every time was fine while
+            // the glow was the same shape as its button, but it also meant the one thing anybody
+            // would want to nudge existed only for the length of a play session. Authoring the
+            // object makes it editable like anything else; this just finds it.
+            Transform authored = transform.Find(LayerName);
+            layerIsAuthored = authored != null;
 
-            layer = go.GetComponent<Image>();
+            var layerRect = layerIsAuthored
+                ? (RectTransform)authored
+                : (RectTransform)new GameObject(
+                    LayerName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image)).transform;
+
+            if (!layerIsAuthored) layerRect.SetParent(rect, false);
+
+            layer = layerRect.GetComponent<Image>();
+            if (layer == null) layer = layerRect.gameObject.AddComponent<Image>();
+
+            // The sprite is still ours even on an authored layer: it is chosen from the button's
+            // proportions and would otherwise have to be kept in step by hand on every copy.
             layer.sprite = shape;
             layer.type = Image.Type.Sliced;
             layer.color = new Color(1f, 1f, 1f, 0f);
@@ -86,6 +117,9 @@ namespace NsoloGame.Unity
 
             FitLayer();
         }
+
+        /// <summary>Child object name the component looks for, and gives the one it builds.</summary>
+        public const string LayerName = "PressLayer";
 
         /// <summary>
         /// Sizes the layer to the button's on-screen rect and undoes the button's own scale.
@@ -106,6 +140,9 @@ namespace NsoloGame.Unity
         {
             if (layer == null) return;
 
+            // Authored in the scene, so its rect is somebody's decision rather than a default.
+            if (layerIsAuthored) return;
+
             var layerRect = (RectTransform)layer.transform;
 
             float sx = Mathf.Approximately(homeScale.x, 0f) ? 1f : homeScale.x;
@@ -115,8 +152,15 @@ namespace NsoloGame.Unity
 
             layerRect.anchorMin = layerRect.anchorMax = new Vector2(0.5f, 0.5f);
             layerRect.pivot = new Vector2(0.5f, 0.5f);
-            layerRect.anchoredPosition = Vector2.zero;
-            layerRect.sizeDelta = new Vector2(size.x * Mathf.Abs(sx), size.y * Mathf.Abs(sy));
+
+            // Both are given in screen pixels so they read the same on every button regardless of
+            // how hard its rect is scaled. sizeDelta is already in those units once the inverse
+            // scale below cancels the parent's, but anchoredPosition is measured in the parent's
+            // own space — which the parent's scale stretches — so it has to be divided back out.
+            layerRect.anchoredPosition = new Vector2(glowOffset.x / sx, glowOffset.y / sy);
+            layerRect.sizeDelta = new Vector2(
+                Mathf.Max(0f, size.x * Mathf.Abs(sx) + glowPadding.x),
+                Mathf.Max(0f, size.y * Mathf.Abs(sy) + glowPadding.y));
             layerRect.localScale = new Vector3(1f / sx, 1f / sy, 1f);
         }
 

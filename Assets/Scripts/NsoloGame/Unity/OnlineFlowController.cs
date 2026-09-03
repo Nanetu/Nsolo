@@ -475,7 +475,12 @@ namespace NsoloGame.Unity
         private void LeaveOnlineConfirmed()
         {
             CloseAndCleanup();
-            menuManager?.ShowWelcome();
+
+            // Back to the mode screen rather than all the way out. Leaving a room is stepping back
+            // one decision — which kind of game — not abandoning the idea of playing, and somebody
+            // whose opponent never turned up most often wants the computer or the other seat rather
+            // than the main menu.
+            menuManager?.ShowMode();
         }
 
         /// <summary>

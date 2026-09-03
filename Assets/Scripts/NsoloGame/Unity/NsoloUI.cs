@@ -406,6 +406,12 @@ namespace NsoloGame.Unity
             return null;
         }
 
+        /// <summary>
+        /// Child object name that, when present under a tagged label, receives the figure on its
+        /// own so it can be positioned and styled independently of the heading above it.
+        /// </summary>
+        public const string ValueChildName = "Value";
+
         /// <summary>Writes into a tagged label if one exists. Does nothing if none does.</summary>
         public static void SetText(ElementId id, string text)
         {
@@ -425,6 +431,21 @@ namespace NsoloGame.Unity
         {
             NsoloElement element = First(id);
             if (element == null) return;
+
+            // A child called Value takes the figure on its own, leaving the heading untouched above
+            // it. Appending both to one label meant the number could never be centred, sized or
+            // coloured apart from its caption — they were one string, so there was nothing in the
+            // scene to select. Adding the child is the whole opt-in; without one, nothing changes.
+            Transform own = element.transform.Find(ValueChildName);
+            if (own != null)
+            {
+                TMP_Text valueLabel = own.GetComponent<TMP_Text>();
+                if (valueLabel != null)
+                {
+                    valueLabel.text = value;
+                    return;
+                }
+            }
 
             TMP_Text label = element.GetComponent<TMP_Text>();
             if (label == null) return;
