@@ -156,6 +156,15 @@ namespace NsoloGame.AI
 
         /// <summary>
         /// Minimax with alpha-beta pruning and transposition table lookup.
+        ///
+        /// <paramref name="isMaximising"/> must say whether the side to move on
+        /// <paramref name="board"/> is <paramref name="aiPlayer"/>, because both the evaluation and
+        /// the terminal scores below are written from the AI's point of view. Recursive calls derive
+        /// it from the child board — <c>moveResult.Board.CurrentPlayer == aiPlayer</c> — rather than
+        /// from the parent's. They used to compare the parent board against a value read off that
+        /// same board, which is always false: every node below the root was minimised, so from depth
+        /// 2 down the search modelled an AI that played against itself. It still returned legal,
+        /// plausible-looking moves, which is why it went unnoticed.
         /// </summary>
         private float Minimax(Core.GameBoard board, int depth, float alpha, float beta, bool isMaximising, int aiPlayer, long startTimeTicks, CancellationToken cancellationToken)
         {
@@ -221,7 +230,7 @@ namespace NsoloGame.AI
                         break;
 
                     Core.MoveResult moveResult = gameEngine.ApplyMoveWithResult(board, move, currentPlayer);
-                    float score = Minimax(moveResult.Board, depth - 1, alpha, beta, board.CurrentPlayer != currentPlayer, aiPlayer, startTimeTicks, cancellationToken);
+                    float score = Minimax(moveResult.Board, depth - 1, alpha, beta, moveResult.Board.CurrentPlayer == aiPlayer, aiPlayer, startTimeTicks, cancellationToken);
                     value = Math.Max(value, score);
                     alpha = Math.Max(alpha, value);
 
@@ -242,7 +251,7 @@ namespace NsoloGame.AI
                         break;
 
                     Core.MoveResult moveResult = gameEngine.ApplyMoveWithResult(board, move, currentPlayer);
-                    float score = Minimax(moveResult.Board, depth - 1, alpha, beta, board.CurrentPlayer != currentPlayer, aiPlayer, startTimeTicks, cancellationToken);
+                    float score = Minimax(moveResult.Board, depth - 1, alpha, beta, moveResult.Board.CurrentPlayer == aiPlayer, aiPlayer, startTimeTicks, cancellationToken);
                     value = Math.Min(value, score);
                     beta = Math.Min(beta, value);
 

@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.EventSystems;
 
 namespace NsoloGame.Unity
 {
@@ -24,10 +25,25 @@ namespace NsoloGame.Unity
 
         private void OnMouseDown()
         {
-            if (uiManager != null)
-            {
-                uiManager.OnPitClicked(row, col);
-            }
+            if (uiManager == null) return;
+
+            // OnMouseDown comes from the collider, not the EventSystem, so a full-screen panel over
+            // the board does not stop it — a tap on a menu or a modal reaches the pit underneath as
+            // well. It only ever looked harmless because the menu states reject the move further
+            // down; during the online formation phase, where panels do sit over a live board, it
+            // rearranges stones behind whatever the player thinks they are tapping.
+            if (IsPointerOverUI()) return;
+
+            uiManager.OnPitClicked(row, col);
+        }
+
+        private static bool IsPointerOverUI()
+        {
+            if (EventSystem.current == null) return false;
+
+            return Input.touchCount > 0
+                ? EventSystem.current.IsPointerOverGameObject(Input.GetTouch(0).fingerId)
+                : EventSystem.current.IsPointerOverGameObject();
         }
     }
 }

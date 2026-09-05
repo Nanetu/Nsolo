@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Threading;
 using NsoloGame.Core;
 using NsoloGame.AI;
+using NsoloGame.Net;
 using NsoloGame.Players;
 
 namespace NsoloGame.Unity
@@ -21,17 +22,28 @@ namespace NsoloGame.Unity
         HotSeatTurn,
         /// <summary>Hot-seat: handover card is up, or the board is turning round. Input is dead.</summary>
         HotSeatHandover,
+        /// <summary>Online: this player's turn. Taps are accepted and sent as move requests.</summary>
+        OnlineLocalTurn,
+        /// <summary>Online: the opponent's turn. The board is live but inert.</summary>
+        OnlineOpponentTurn,
+        /// <summary>
+        /// Online: nothing to do but wait on the network — for the opponent's formation, or for the
+        /// host's answer to a move already sent. Input is dead.
+        /// </summary>
+        OnlineWaiting,
         GameOver
     }
 
     /// <summary>
     /// Who the two seats belong to. VersusComputer is the original single-player game and its code
-    /// path is untouched by hot-seat; VersusHuman runs the agent-driven loop further down.
+    /// path is untouched by hot-seat; VersusHuman runs the agent-driven loop further down, and
+    /// Online runs a third loop that takes its moves from the network rather than computing them.
     /// </summary>
     public enum GameMode
     {
         VersusComputer,
-        VersusHuman
+        VersusHuman,
+        Online
     }
 
     public class GameController : MonoBehaviour
@@ -75,12 +87,28 @@ namespace NsoloGame.Unity
         /// <summary>Which player is laying out their stones during the shared formation phase.</summary>
         private int arrangingPlayer = 1;
 
+        // ── Online ───────────────────────────────────────────────────────
+        // Inert in both local modes.
+
         /// <summary>
-        /// Set by the first press of FORFEIT and cleared by anything else. The button sits exactly
-        /// where HINT does in single-player, so a single tap ending the game outright is a mis-tap
-        /// waiting to happen — the second press is what actually concedes.
+        /// The live match, or null when not playing online. This is the only thing here that knows
+        /// anything about the network, and it is deliberately an object this class is handed rather
+        /// than one it builds — GameController does not connect, join, or send; it reacts to what
+        /// the match tells it and asks the match for what it wants.
         /// </summary>
-        private bool forfeitArmed;
+        private NetworkMatch networkMatch;
+
+        /// <summary>Which seat this device plays online. 1 for the room's creator, 2 for the joiner.</summary>
+        private int onlineLocalPlayer = 1;
+
+        /// <summary>
+        /// Authoritative results waiting their turn on screen. See <see cref="HandleMoveApplied"/> —
+        /// the board is settled long before the stones finish moving, so these have to be shown one
+        /// after another rather than as they arrive.
+        /// </summary>
+        private readonly Queue<MoveResult> onlineResults = new Queue<MoveResult>();
+
+        private bool playingOnlineMove;
 
         private Move pendingMove;
 
@@ -132,10 +160,36 @@ namespace NsoloGame.Unity
         public GameMode CurrentMode => mode;
 
         /// <summary>
+        /// Which seat this device is playing online. Meaningless in the local modes. Exposed so the
+        /// result panel can work out whether "you" won, which is not the same as player 1 winning.
+        /// </summary>
+        public int OnlineLocalPlayer => onlineLocalPlayer;
+
+        /// <summary>
         /// Wall-clock length of the game that just finished. Captured once in FinishGame so the
         /// game-over panel keeps showing the final time instead of a clock that keeps ticking.
         /// </summary>
         public float LastGameSeconds { get; private set; }
+
+        /// <summary>
+        /// Stones this device's player took over the finished game, and their longest relay in it.
+        ///
+        /// Both are per-player rather than per-game totals. A relay is the run of laps a single
+        /// move turns into when the last stone keeps landing in an occupied hole, and it is the one
+        /// number in Nsolo a player actually brags about — so it has to be *theirs*, not whichever
+        /// side happened to manage it. Captures likewise: the board carries no separate captured
+        /// pile, so this is the only place the figure survives the game that produced it.
+        /// </summary>
+        public int LastGameCaptures { get; private set; }
+        public int LastGameLongestRelay { get; private set; }
+
+        // Indexed by player number, so seat 1 and seat 2 are counted apart and the read-outs above
+        // can pick whichever seat this device was playing. Index 0 is unused.
+        private readonly int[] capturesThisGame = new int[3];
+        private readonly int[] longestRelayThisGame = new int[3];
+
+        /// <summary>Which seat this device is playing: its own online seat, or the human's.</summary>
+        private int LocalSeat => mode == GameMode.Online ? onlineLocalPlayer : humanPlayer;
 
         private void Awake()
         {
@@ -215,18 +269,27 @@ namespace NsoloGame.Unity
             PassDeviceModal.Instance?.ForceHide();
             boardHistory.Clear();
             isPaused = false;
-            forfeitArmed = false;
+            onlineResults.Clear();
+            playingOnlineMove = false;
+            GameModals.Instance?.HideAll();
             gameBoard = new GameBoard();
             gameStartTime = Time.time;
             formationHeld = 0;
 
+            System.Array.Clear(capturesThisGame, 0, capturesThisGame.Length);
+            System.Array.Clear(longestRelayThisGame, 0, longestRelayThisGame.Length);
+
             bool hotSeat = mode == GameMode.VersusHuman;
+            bool online = mode == GameMode.Online;
 
             // Hot-seat always opens with player 1, whose seat is also the camera's home position.
-            // The AI game keeps its "loser of the last game starts" rule.
-            gameBoard.CurrentPlayer = hotSeat ? 1 : GetStartingPlayerForDifficulty(aiDifficulty);
+            // The AI game keeps its "loser of the last game starts" rule. Online has neither: the
+            // host draws for it and says so in the start packet, so there is nothing to guess here.
+            gameBoard.CurrentPlayer = hotSeat || online ? 1 : GetStartingPlayerForDifficulty(aiDifficulty);
             hotSeatCurrentPlayer = gameBoard.CurrentPlayer;
-            arrangingPlayer = 1;
+
+            // Online, each device arranges its own side and only its own side.
+            arrangingPlayer = online ? onlineLocalPlayer : 1;
 
             if (uiManager == null)
             {
@@ -252,14 +315,32 @@ namespace NsoloGame.Unity
                 if (hotSeatAgents[1] == null) hotSeatAgents[1] = new LocalHumanAgent("Player 1");
                 if (hotSeatAgents[2] == null) hotSeatAgents[2] = new LocalHumanAgent("Player 2");
             }
+            else if (online)
+            {
+                // The opponent's side is theirs to arrange, on their own device. Until their
+                // formation arrives, the far rows just show the default two-per-pit board — nothing
+                // is generated for them, and nothing that appears there before the match starts is
+                // real.
+                StartCoroutine(OrientBoardForLocalSeat());
+            }
             else
             {
                 GenerateAIFormation();
             }
 
+            // Each background captions its two score boxes differently, so which seat belongs on
+            // which side is a property of the mode, not a constant. Set before the first draw.
+            if (online) uiManager.SetScoreSides(Opponent(onlineLocalPlayer), onlineLocalPlayer);
+            else if (hotSeat) uiManager.SetScoreSides(1, 2);
+            else uiManager.SetScoreSides(aiPlayer, humanPlayer);
+
+            // The left box is the opponent's. Every mode captions it now that the rebuilt HUD
+            // draws those captions as text rather than baking them into the background art.
+            uiManager.SetSeatNames(mode, online ? networkMatch?.OpponentName : null);
+
             gameState = GameState.PreGameFormation;
             uiManager.UpdateDisplay(gameBoard);
-            uiManager.ShowStatus(hotSeat ? "Player 1: Arrange" : "Arrange");
+            uiManager.ShowStatus(online ? "Arrange your side" : (hotSeat ? "Player 1: Arrange" : "Arrange"));
             uiManager.ResetGameTimer();
             uiManager.ClearLastMove();
             uiManager.SetUndoInteractable(false);
@@ -286,9 +367,9 @@ namespace NsoloGame.Unity
                 return;
             }
 
-            // Same pill, third job: there is no AI to ask for a hint in a two-player game, so the
-            // button concedes instead.
-            if (mode == GameMode.VersusHuman)
+            // Same pill, third job: there is no AI to ask for a hint against another person, so the
+            // button concedes instead — in both two-player modes.
+            if (mode == GameMode.VersusHuman || mode == GameMode.Online)
             {
                 RequestForfeit();
                 return;
@@ -305,21 +386,31 @@ namespace NsoloGame.Unity
         {
             bool arranging = gameState == GameState.PreGameFormation;
 
+            if (mode == GameMode.Online)
+            {
+                // Live on your own turn only. Conceding while the opponent's move is still being
+                // animated would land a forfeit in the middle of their turn resolving — and online
+                // it would race the host, which is the one place the result has to be unambiguous.
+                uiManager?.SetActionButton(
+                    arranging ? ActionLabelStart : ActionLabelForfeit,
+                    arranging || gameState == GameState.OnlineLocalTurn,
+                    arranging ? HudActionRole.Start : HudActionRole.Forfeit);
+                return;
+            }
+
             if (mode == GameMode.VersusHuman)
             {
-                string label = arranging
-                    ? ActionLabelStart
-                    : (forfeitArmed ? "CONFIRM?" : ActionLabelForfeit);
-
                 uiManager?.SetActionButton(
-                    label,
-                    arranging || gameState == GameState.HotSeatTurn);
+                    arranging ? ActionLabelStart : ActionLabelForfeit,
+                    arranging || gameState == GameState.HotSeatTurn,
+                    arranging ? HudActionRole.Start : HudActionRole.Forfeit);
                 return;
             }
 
             uiManager?.SetActionButton(
                 arranging ? ActionLabelStart : ActionLabelHint,
-                arranging || gameState == GameState.HumanTurn);
+                arranging || gameState == GameState.HumanTurn,
+                arranging ? HudActionRole.Start : HudActionRole.Hint);
         }
 
         // ── Pre-Game Formation Phase ─────────────────────────────────────────
@@ -388,6 +479,12 @@ namespace NsoloGame.Unity
                 return;
             }
 
+            if (mode == GameMode.Online)
+            {
+                ConfirmOnlineFormation();
+                return;
+            }
+
             gameState = gameBoard.CurrentPlayer == humanPlayer ? GameState.HumanTurn : GameState.AiThinking;
 
             // The clock starts the moment the player commits their formation, whichever side moves
@@ -435,6 +532,10 @@ namespace NsoloGame.Unity
         /// </summary>
         private bool IsRowOwnedByActivePlayer(int row)
         {
+            // Online, the answer never changes: this device only ever plays its own seat, whether it
+            // is arranging or moving.
+            if (mode == GameMode.Online) return OwnsRow(onlineLocalPlayer, row);
+
             if (mode != GameMode.VersusHuman) return IsHumanRow(row);
 
             int active = gameState == GameState.PreGameFormation ? arrangingPlayer : hotSeatCurrentPlayer;
@@ -458,8 +559,32 @@ namespace NsoloGame.Unity
             HandleHintResult();
         }
 
+        /// <summary>
+        /// Whether taps on the 3D board count. Driven by <see cref="MenuManager"/>, which switches it
+        /// off whenever the gameplay view is hidden.
+        ///
+        /// The board is 3D geometry with colliders, not part of the Canvas, so a full-screen menu
+        /// does not cover it in any sense the physics raycast understands — PitClickHandler already
+        /// checks the EventSystem, but that only holds while every panel keeps its raycast target
+        /// switched on. This is the belt to that pair of braces: while a menu is up, board taps are
+        /// not merely blocked, they are not being accepted at all.
+        /// </summary>
+        private bool boardInputEnabled = true;
+
+        public void SetBoardInputEnabled(bool enabled)
+        {
+            if (boardInputEnabled == enabled) return;
+
+            boardInputEnabled = enabled;
+            Log($"SetBoardInputEnabled({enabled})");
+        }
+
         public void OnHoleTouched(int row, int col)
         {
+            // Logged after the guard, not before it. Logging first made every rejected tap look like
+            // a tap that had landed, which is worrying to read and completely misleading.
+            if (!boardInputEnabled) return;
+
             Log($"OnHoleTouched({row},{col}) state={gameState}");
             if (isPaused) return;
 
@@ -473,11 +598,22 @@ namespace NsoloGame.Unity
             if (PassDeviceModal.Instance != null && PassDeviceModal.Instance.IsBlocking) return;
             if (boardFlipper != null && boardFlipper.IsFlipping) return;
 
+            // A modal is up — the room code, a forfeit question, a lost connection. The board waits.
+            if (GameModals.Instance != null && GameModals.Instance.IsBlocking) return;
+
+            // Nothing to do but wait on the network, so a tap should not be mistaken for a move.
+            if (gameState == GameState.OnlineWaiting || gameState == GameState.OnlineOpponentTurn)
+            {
+                if (gameState == GameState.OnlineOpponentTurn)
+                    uiManager.ShowLastMove("Wait for your opponent to move");
+                return;
+            }
+
             // Reaching across to the far side is the classic first-timer mistake, so it earns an
             // explanation rather than silence — while arranging and during play alike.
             if (!IsRowOwnedByActivePlayer(row) &&
                 (gameState == GameState.PreGameFormation || gameState == GameState.HumanTurn ||
-                 gameState == GameState.HotSeatTurn))
+                 gameState == GameState.HotSeatTurn || gameState == GameState.OnlineLocalTurn))
             {
                 uiManager.ShowLastMove(mode == GameMode.VersusHuman
                     ? "Those rows belong to the other player"
@@ -496,6 +632,12 @@ namespace NsoloGame.Unity
             if (gameState == GameState.HotSeatTurn)
             {
                 SubmitHotSeatMove(row, col);
+                return;
+            }
+
+            if (gameState == GameState.OnlineLocalTurn)
+            {
+                SubmitOnlineMove(row, col);
                 return;
             }
 
@@ -544,6 +686,7 @@ namespace NsoloGame.Unity
             GameBoard startingBoard = gameBoard.Clone();
             MoveResult moveResult = ApplyMoveWithLandingTrace(pendingMove, humanPlayer);
             currentMoveSegmentCount = moveResult.SowingSegments?.Count ?? 0;
+            TrackMoveStats(moveResult);
             uiManager.ShowStatus("Sowing");
             RefreshActionButton();
             yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
@@ -604,6 +747,7 @@ namespace NsoloGame.Unity
             GameBoard startingBoard = gameBoard.Clone();
             MoveResult moveResult = ApplyMoveWithLandingTrace(move, aiPlayer);
             currentMoveSegmentCount = moveResult.SowingSegments?.Count ?? 0;
+            TrackMoveStats(moveResult);
             uiManager.ShowStatus("Computer sowing");
             yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
             gameBoard = moveResult.Board;
@@ -700,7 +844,6 @@ namespace NsoloGame.Unity
         {
             hotSeatCurrentPlayer = player;
             gameBoard.CurrentPlayer = player;
-            forfeitArmed = false;
             gameState = GameState.HotSeatTurn;
 
             IPlayerAgent agent = hotSeatAgents[player];
@@ -747,12 +890,6 @@ namespace NsoloGame.Unity
             LocalHumanAgent agent = hotSeatAgents[hotSeatCurrentPlayer] as LocalHumanAgent;
             if (agent == null || !agent.IsAwaitingInput) return;
 
-            if (forfeitArmed)
-            {
-                forfeitArmed = false;
-                RefreshActionButton();
-            }
-
             Move selected = null;
             foreach (Move m in gameEngine.GetLegalMoves(gameBoard, hotSeatCurrentPlayer))
                 if (m.Row == row && m.Col == col) { selected = m; break; }
@@ -792,24 +929,44 @@ namespace NsoloGame.Unity
             activeMoveRoutine = StartCoroutine(ApplyHotSeatMoveCoroutine(move, hotSeatCurrentPlayer));
         }
 
-        private IEnumerator ApplyHotSeatMoveCoroutine(Move move, int player)
+        /// <summary>
+        /// Plays one already-computed move: animates the stones, adopts the resulting board, and
+        /// says what happened.
+        ///
+        /// It takes a <see cref="MoveResult"/> and has no idea where it came from — the local engine
+        /// in hot-seat, the host's authoritative packet online. That is the whole point of it being
+        /// its own method. The animation was already driven off a computed result rather than off
+        /// the tap that caused it, so making online work needed no change to how stones move; it
+        /// only needed this step to stop assuming it was the one who computed the result.
+        ///
+        /// The caller owns what happens next — ending the game, handing the device over, asking the
+        /// next player — because that differs per mode and this does not.
+        /// </summary>
+        private IEnumerator PlayMoveResult(MoveResult moveResult, string actorName, string sowingStatus)
         {
-            int opponent = Opponent(player);
-
-            // Both movers are people here, so captures are always worded as something a player did.
+            // Both movers are people in every mode that reaches here, so captures are always worded
+            // as something a player did rather than something the computer did to them.
             currentMoverIsHuman = true;
 
             uiManager.ClearHighlights();
 
             GameBoard startingBoard = gameBoard.Clone();
-            MoveResult moveResult = ApplyMoveWithLandingTrace(move, player);
             currentMoveSegmentCount = moveResult.SowingSegments?.Count ?? 0;
+            TrackMoveStats(moveResult);
 
-            uiManager.ShowStatus("Sowing");
+            uiManager.ShowStatus(sowingStatus);
             RefreshActionButton();
             yield return uiManager.PlayMoveAnimation(startingBoard, moveResult);
             gameBoard = moveResult.Board;
-            ShowMoveFeedback(moveResult, NameOf(player));
+            ShowMoveFeedback(moveResult, actorName);
+        }
+
+        private IEnumerator ApplyHotSeatMoveCoroutine(Move move, int player)
+        {
+            int opponent = Opponent(player);
+            MoveResult moveResult = ApplyMoveWithLandingTrace(move, player);
+
+            yield return PlayMoveResult(moveResult, NameOf(player), "Sowing");
 
             activeMoveRoutine = null;
 
@@ -819,29 +976,50 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
-        /// Conceding. The first press arms it and relabels the pill; the second actually resigns.
-        /// This button sits exactly where HINT does in single-player, and one stray tap ending the
-        /// game outright is too easy to do by accident — delete the armed branch for a single-press
-        /// forfeit.
+        /// Conceding, in either two-player mode.
+        ///
+        /// This used to arm on the first press and resign on the second, because the pill sits
+        /// exactly where HINT does in single-player and one stray tap ending a game outright is too
+        /// easy to do by accident. The question is now asked properly, in a modal, which says what
+        /// conceding actually costs instead of relabelling a button to "CONFIRM?" — and asks it the
+        /// same way whether the opponent is across the table or across the country.
         /// </summary>
         private void RequestForfeit()
         {
-            if (gameState != GameState.HotSeatTurn) return;
+            bool online = mode == GameMode.Online;
+            if (gameState != (online ? GameState.OnlineLocalTurn : GameState.HotSeatTurn)) return;
 
-            if (!forfeitArmed)
+            AudioManager.Click();
+            Haptics.Light();
+
+            int conceding = online ? onlineLocalPlayer : hotSeatCurrentPlayer;
+
+            if (GameModals.Instance == null)
             {
-                forfeitArmed = true;
-                RefreshActionButton();
-                uiManager.ShowLastMove("Press again to concede this game");
-                Haptics.Light();
-                AudioManager.Click();
+                // Nothing wired up to ask with. Refusing to concede is the safe failure: a player
+                // who cannot forfeit is inconvenienced, one who forfeits by accident is not.
+                Debug.LogWarning("GameController: no GameModals in the scene, so forfeit is unavailable.");
+                uiManager.ShowLastMove("Forfeit is unavailable");
                 return;
             }
 
-            forfeitArmed = false;
-            int conceding = hotSeatCurrentPlayer;
+            GameModals.Instance.ShowForfeitConfirm(
+                onConfirm: () => ConfirmForfeit(conceding),
+                onCancel: () => RefreshActionButton());
+        }
 
+        private void ConfirmForfeit(int conceding)
+        {
             Log($"Forfeit by player {conceding}.");
+
+            if (mode == GameMode.Online)
+            {
+                // Told to the opponent before the local game ends, so they learn why their screen
+                // just stopped waiting for a move rather than watching it time out.
+                networkMatch?.RequestForfeit();
+                return;
+            }
+
             CancelHotSeatTurn();
             uiManager.ShowLastMove($"{NameOf(conceding)} forfeited");
             FinishGame(Opponent(conceding));
@@ -869,6 +1047,342 @@ namespace NsoloGame.Unity
         {
             if (boardFlipper == null) boardFlipper = FindObjectOfType<BoardFlipper>();
         }
+
+        // ── Online ───────────────────────────────────────────────────────
+        //
+        // The third turn loop. It differs from the other two in one way that matters: it never
+        // computes a move result for display. Every move that reaches the screen — the opponent's
+        // and this player's alike — arrives as an authoritative result from the match and is played
+        // through PlayMoveResult, the same method hot-seat uses. A tap does not move a stone here;
+        // it sends a request, and the answer moves the stone.
+
+        /// <summary>
+        /// Entry point for an online game. The caller has already built the match and seated it —
+        /// this class does not connect to anything.
+        /// </summary>
+        public void StartNewOnlineGame(NetworkMatch match)
+        {
+            Log($"StartNewOnlineGame(localPlayer={match?.LocalPlayer}, host={match?.IsHost})");
+
+            if (match == null)
+            {
+                Debug.LogError("GameController: StartNewOnlineGame called with no match.");
+                return;
+            }
+
+            DetachOnlineMatch();
+
+            mode = GameMode.Online;
+            InitializeSystems();
+
+            networkMatch = match;
+            onlineLocalPlayer = match.LocalPlayer;
+
+            networkMatch.MatchStarted += HandleMatchStarted;
+            networkMatch.MoveApplied += HandleMoveApplied;
+            networkMatch.Forfeited += HandleForfeited;
+            networkMatch.MatchEnded += HandleMatchEnded;
+            networkMatch.Desynced += HandleDesynced;
+
+            InitializeGame();
+        }
+
+        /// <summary>
+        /// Unsubscribes from the current match. Called before seating another one and when leaving
+        /// an online game, so a finished match cannot keep driving the board.
+        /// </summary>
+        public void DetachOnlineMatch()
+        {
+            if (networkMatch == null) return;
+
+            networkMatch.MatchStarted -= HandleMatchStarted;
+            networkMatch.MoveApplied -= HandleMoveApplied;
+            networkMatch.Forfeited -= HandleForfeited;
+            networkMatch.MatchEnded -= HandleMatchEnded;
+            networkMatch.Desynced -= HandleDesynced;
+
+            networkMatch = null;
+        }
+
+        /// <summary>
+        /// Turns the board round for the joiner, once, before they arrange their stones.
+        ///
+        /// Player 2's pits are the top two rows, and the camera's home position looks at the board
+        /// from player 1's side. Rather than mirroring board coordinates at the network boundary —
+        /// which would mean two coordinate systems and a conversion to get wrong — the joiner's
+        /// camera is simply parked on their own side, exactly as hot-seat does between turns. Board
+        /// coordinates then mean the same thing on both devices for the whole match.
+        /// </summary>
+        private IEnumerator OrientBoardForLocalSeat()
+        {
+            if (onlineLocalPlayer != 2) yield break;
+
+            ResolveBoardFlipper();
+            if (boardFlipper == null) yield break;
+
+            yield return boardFlipper.Flip();
+            uiManager.UpdateDisplay(gameBoard);
+        }
+
+        /// <summary>
+        /// Commits this player's opening formation and waits for the other one.
+        ///
+        /// Both players arrange at the same time rather than taking turns — there is no device to
+        /// pass, so making one of them watch the other lay out sixteen pits would be dead time for
+        /// no reason. Whoever finishes first waits.
+        /// </summary>
+        private void ConfirmOnlineFormation()
+        {
+            AudioManager.Click();
+            Haptics.Light();
+
+            formationHeld = 0;
+            gameState = GameState.OnlineWaiting;
+
+            uiManager.ShowStatus("Waiting");
+            uiManager.ShowLastMove("Waiting for your opponent to finish arranging...");
+            uiManager.ClearHighlights();
+            RefreshActionButton();
+
+            networkMatch?.SubmitLocalFormation(CollectLocalFormation());
+        }
+
+        /// <summary>Reads this player's sixteen pits out of the board, in the order the protocol expects.</summary>
+        private int[] CollectLocalFormation()
+        {
+            int firstRow = onlineLocalPlayer == 1 ? 0 : 2;
+            var cells = new int[16];
+
+            for (int i = 0; i < cells.Length; i++)
+                cells[i] = gameBoard.Get(firstRow + i / GameBoard.Cols, i % GameBoard.Cols);
+
+            return cells;
+        }
+
+        private void HandleMatchStarted(GameBoard board, int firstPlayer)
+        {
+            Log($"Online match started. First player = {firstPlayer}.");
+
+            gameBoard = board.Clone();
+
+            // Re-asserted here as well as at setup: the nickname can still be settling when the
+            // board is first drawn, and this is the last moment before play where it is free.
+            uiManager.SetSeatNames(GameMode.Online, networkMatch?.OpponentName);
+
+            uiManager.UpdateDisplay(gameBoard);
+
+            // Same moment the local modes start their clock and their music: the point at which the
+            // board is set and play actually begins.
+            uiManager.StartTurnTimer();
+            AudioManager.StartGameMusic();
+
+            BeginOnlineTurn(firstPlayer);
+        }
+
+        private void BeginOnlineTurn(int player)
+        {
+            gameBoard.CurrentPlayer = player;
+
+            bool mine = player == onlineLocalPlayer;
+            gameState = mine ? GameState.OnlineLocalTurn : GameState.OnlineOpponentTurn;
+
+            string opponent = networkMatch?.OpponentName ?? "Opponent";
+
+            uiManager.ShowStatus(mine ? "Your turn" : $"{opponent}'s turn");
+            uiManager.StartTurnTimer();
+            RefreshActionButton();
+
+            if (mine)
+            {
+                uiManager.HighlightLegalMoves(gameEngine.GetLegalMoves(gameBoard, player));
+                uiManager.ShowLastMove("Select one of your highlighted pits");
+                TutorialCoach.Show(TutorialTip.YourPits);
+                return;
+            }
+
+            uiManager.ClearHighlights();
+            uiManager.ShowLastMove($"Waiting for {opponent} to move...");
+        }
+
+        /// <summary>
+        /// A tap during this player's own online turn.
+        ///
+        /// The legality check here is a local pre-filter and nothing more. It exists so an obviously
+        /// impossible tap — an empty pit, a single stone, the opponent's row — gets its usual
+        /// immediate flash and buzz instead of a round trip's worth of silence. It is not what makes
+        /// the move legal: the host checks again against the real board and is free to disagree.
+        /// Nothing on this screen moves until it answers.
+        /// </summary>
+        private void SubmitOnlineMove(int row, int col)
+        {
+            Move selected = null;
+            foreach (Move m in gameEngine.GetLegalMoves(gameBoard, onlineLocalPlayer))
+                if (m.Row == row && m.Col == col) { selected = m; break; }
+
+            if (selected == null)
+            {
+                uiManager.FlashIllegalMove(row, col);
+                AudioManager.Illegal();
+                Haptics.Light();
+                TutorialCoach.Show(TutorialTip.NeedTwoStones);
+                return;
+            }
+
+            gameState = GameState.OnlineWaiting;
+            uiManager.ClearHighlights();
+            uiManager.ShowStatus("Sending");
+            RefreshActionButton();
+
+            networkMatch?.RequestMove(selected);
+        }
+
+        /// <summary>
+        /// An authoritative move, from either player. This is the only thing that moves stones in an
+        /// online game.
+        ///
+        /// Results are queued rather than played the moment they arrive. The board state they
+        /// describe is already settled by the time this is called, but the animation that shows it
+        /// takes seconds, and a long relay chain takes longer still — so an opponent moving promptly
+        /// can land their result while the previous one is still sowing. Playing them as they
+        /// arrived would run two animations over one board.
+        /// </summary>
+        private void HandleMoveApplied(MoveResult result)
+        {
+            if (mode != GameMode.Online || result == null) return;
+
+            onlineResults.Enqueue(result);
+            PumpOnlineResults();
+        }
+
+        private void PumpOnlineResults()
+        {
+            if (playingOnlineMove || onlineResults.Count == 0) return;
+
+            playingOnlineMove = true;
+            activeMoveRoutine = StartCoroutine(PlayOnlineMoveCoroutine(onlineResults.Dequeue()));
+        }
+
+        private IEnumerator PlayOnlineMoveCoroutine(MoveResult result)
+        {
+            int player = result.Player;
+            int opponent = Opponent(player);
+            bool mine = player == onlineLocalPlayer;
+
+            yield return PlayMoveResult(
+                result,
+                OnlineNameOf(player),
+                mine ? "Sowing" : "Opponent sowing");
+
+            activeMoveRoutine = null;
+            playingOnlineMove = false;
+
+            if (TryEndGameAfterMove(player, opponent)) yield break;
+
+            // Anything that arrived while this was playing goes next, and the turn is only handed
+            // over once the queue has actually drained — otherwise the board would invite a move
+            // while a move it has not shown yet is still waiting.
+            if (onlineResults.Count > 0)
+            {
+                PumpOnlineResults();
+                yield break;
+            }
+
+            BeginOnlineTurn(opponent);
+        }
+
+        private void HandleForfeited(int conceding)
+        {
+            if (mode != GameMode.Online) return;
+
+            Log($"Online forfeit by player {conceding}.");
+            uiManager.ShowLastMove(conceding == onlineLocalPlayer
+                ? "You forfeited"
+                : "Your opponent forfeited");
+
+            FinishGame(Opponent(conceding));
+        }
+
+        /// <summary>
+        /// The two boards disagreed, which should be impossible. <c>NetworkMatch</c> has already
+        /// adopted the host's state; this redraws to match it so the player is at least looking at
+        /// the real game rather than a divergent one.
+        /// </summary>
+        private void HandleDesynced()
+        {
+            if (mode != GameMode.Online || networkMatch?.Board == null) return;
+
+            Debug.LogError("GameController: board desync — redrawing from the host's state.");
+            gameBoard = networkMatch.Board.Clone();
+            uiManager.UpdateDisplay(gameBoard);
+            uiManager.ShowLastMove("Re-synced with your opponent");
+        }
+
+        private void HandleMatchEnded(MatchEndReason reason) => EndOnlineMatch(reason);
+
+        /// <summary>
+        /// Stops an online game that cannot continue, and says so on the board.
+        ///
+        /// Public because the order this used to run in was wrong in a way that froze the game.
+        /// The transport raises its ending to two listeners: this controller, through
+        /// <see cref="NetworkMatch"/>, and <see cref="OnlineFlowController"/>, which put the
+        /// "opponent left" dialog up. The flow controller was subscribed first, and the first thing
+        /// it did was tear the match down — which unhooked this controller from the very event it
+        /// was waiting for. So the dialog appeared over a board that had never been told anything:
+        /// still in the opponent's turn, still answering every tap with "wait for your opponent to
+        /// move", with no opponent and no way out but force-quitting. Dismissing the dialog to look
+        /// at the final position was therefore the one thing a player must not do.
+        ///
+        /// The flow controller calls this before it cleans up now, so the board is always told
+        /// first. The subscription is kept as well, for any path that ends a match without going
+        /// through that controller, and the two are safe to double up: a game already over is left
+        /// exactly as it is.
+        /// </summary>
+        public void EndOnlineMatch(MatchEndReason reason)
+        {
+            if (mode != GameMode.Online) return;
+
+            // Already finished — somebody won, or somebody forfeited, or this is the second of the
+            // two reports. Whichever it is, the result on screen is the true one and stands.
+            if (gameState == GameState.GameOver) return;
+
+            Log($"Online match ended: {reason}.");
+
+            // Everything waiting on the network stops here, before the modal goes up — a coroutine
+            // still animating a move would otherwise carry on behind it.
+            if (activeMoveRoutine != null)
+            {
+                StopCoroutine(activeMoveRoutine);
+                activeMoveRoutine = null;
+            }
+            onlineResults.Clear();
+            playingOnlineMove = false;
+            uiManager.CancelMoveAnimation();
+            uiManager.ClearHighlights();
+
+            gameState = GameState.GameOver;
+            RefreshActionButton();
+            AudioManager.Silence();
+
+            // Said on the board as well as in the dialog, because the dialog can be dismissed: a
+            // player who stays to read the final position would otherwise be looking at a board
+            // still captioned with whatever the last move was, as though it were their turn.
+            uiManager.ShowStatus("Match ended");
+            uiManager.ShowLastMove(reason == MatchEndReason.OpponentLeft
+                ? "Your opponent left. This is the final position."
+                : "Connection lost. This is the final position.");
+
+            // The modal itself belongs to OnlineFlowController, which hears about this from the
+            // transport directly. This method's job is only to stop the game that was in progress —
+            // it does not know what panels exist and should not.
+        }
+
+        /// <summary>
+        /// How a seat is named in the move feedback line. The local player is always "You" — their
+        /// own username adds nothing when they are the one reading it — while the opponent is named,
+        /// since that is the only place their name appears once play starts.
+        /// </summary>
+        private string OnlineNameOf(int player) =>
+            player == onlineLocalPlayer ? "You" : (networkMatch?.OpponentName ?? "Opponent");
 
         // ── Undo ─────────────────────────────────────────────────────────
 
@@ -930,7 +1444,7 @@ namespace NsoloGame.Unity
             uiManager.UpdateDisplay(gameBoard);
             uiManager.ShowStatus("Your turn");
             uiManager.ShowLastMove(interruptedAi
-                ? "Move undone — computer's reply cancelled"
+                ? "Move undone. Computer's reply cancelled"
                 : "Move undone");
             uiManager.StartTurnTimer();
 
@@ -1117,7 +1631,6 @@ namespace NsoloGame.Unity
             CancelAiThinking();
             CancelHintSearch();
             CancelHotSeatTurn();
-            forfeitArmed = false;
             gameState = GameState.GameOver;
             RefreshActionButton();
 
@@ -1127,35 +1640,75 @@ namespace NsoloGame.Unity
 
             float elapsed = Time.time - gameStartTime;
             LastGameSeconds = elapsed;
+
+            int seat = LocalSeat;
+            LastGameCaptures = seat >= 1 && seat < capturesThisGame.Length ? capturesThisGame[seat] : 0;
+            LastGameLongestRelay = seat >= 1 && seat < longestRelayThisGame.Length ? longestRelayThisGame[seat] : 0;
             bool humanWon = winner == humanPlayer;
             bool hotSeat = mode == GameMode.VersusHuman;
+            bool online = mode == GameMode.Online;
+            bool localWon = online ? winner == onlineLocalPlayer : humanWon;
 
-            // Hot-seat results are deliberately not recorded. The whole stats system is keyed by AI
-            // difficulty — win rate, per-difficulty records, the "loser starts next" rule — and
-            // filing two-player games under a difficulty nobody played would make those numbers
-            // mean nothing. Tracking them properly needs its own counters, which is future work.
-            if (!hotSeat)
+            // Neither hot-seat nor online results are recorded, for the same reason: the whole stats
+            // system is keyed by AI difficulty — win rate, per-difficulty records, the "loser starts
+            // next" rule — and filing a game nobody played at a difficulty under one would make
+            // those numbers mean nothing. Online needs its own counters and its own axis (an
+            // opponent context rather than a difficulty), which is a save-data migration and belongs
+            // with the profile rework, not here.
+            if (!hotSeat && !online)
             {
                 ProfileManager.Instance?.RecordGameResult((int)aiDifficulty, humanWon, elapsed);
             }
 
+            // Filed for every mode, unlike the result above. The objection that keeps hot-seat and
+            // online out of the win record is that those stats are keyed by AI difficulty and a
+            // game played at no difficulty would make them meaningless. These three are not: time
+            // at the board is time at the board, and a relay is a relay whoever was across from you.
+            ProfileManager.Instance?.RecordSessionStats(
+                elapsed, LastGameCaptures, LastGameLongestRelay, offline: !online);
+
             AudioManager.Silence();
             // Somebody in the room won a hot-seat game, so it always gets the victory sting.
-            AudioManager.GameOver(hotSeat || humanWon);
+            AudioManager.GameOver(hotSeat || localWon);
             Haptics.Heavy();
 
-            if (!hotSeat)
+            if (!hotSeat && !online)
             {
                 int loser = winner == humanPlayer ? aiPlayer : humanPlayer;
                 PlayerPrefs.SetInt($"LastLoser_Diff{(int)aiDifficulty}", loser);
                 PlayerPrefs.Save();
             }
 
-            // Started before the panel goes up so the turn is already under way behind it.
+            // Started before the panel goes up so the turn is already under way behind it. Online is
+            // left alone: the joiner's camera is parked on their own seat, which is where it should
+            // stay — turning it back would show them the board upside down at the final whistle.
             if (hotSeat) StartCoroutine(ReturnBoardToDefaultView());
 
-            uiManager?.ShowGameOver(winner, hotSeat);
+            if (online) uiManager?.ShowGameOverOnline(winner, onlineLocalPlayer);
+            else uiManager?.ShowGameOver(winner, hotSeat);
+
             GameOver?.Invoke(winner, p1Stones, p2Stones);
+        }
+
+        /// <summary>
+        /// Files one move's captures and relay length against the player who made it.
+        ///
+        /// Called from all three move paths — the human's, the computer's, and the shared one
+        /// hot-seat and online both run through — and keyed on the result's own player rather than
+        /// on whose turn the caller believes it is. That last part matters online, where the move
+        /// being applied is one the host resolved and may belong to either seat.
+        /// </summary>
+        private void TrackMoveStats(MoveResult moveResult)
+        {
+            if (moveResult == null) return;
+
+            int player = moveResult.Player;
+            if (player < 1 || player >= capturesThisGame.Length) return;
+
+            capturesThisGame[player] += moveResult.CapturedStones;
+
+            int relay = moveResult.SowingSegments?.Count ?? 0;
+            if (relay > longestRelayThisGame[player]) longestRelayThisGame[player] = relay;
         }
 
         /// <summary>

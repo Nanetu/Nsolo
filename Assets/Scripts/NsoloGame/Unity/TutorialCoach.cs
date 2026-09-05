@@ -241,6 +241,10 @@ namespace NsoloGame.Unity
             }
             instance = this;
 
+            // Static, so it outlives a play session when Domain Reload is switched off. A coach
+            // that came back still suppressed would never speak again.
+            Suppressed = false;
+
             tipsEnabled = PlayerPrefs.GetInt(EnabledPrefKey, TipsOnByDefault ? 1 : 0) == 1;
 
             // Catches an install that worked through the whole set in an earlier session: without
@@ -275,8 +279,42 @@ namespace NsoloGame.Unity
             instance.ShowTip(tip, onDismissed);
         }
 
+        /// <summary>
+        /// Whether tips are being held back for the mode being played, whatever the player's own
+        /// setting says. Only online play sets it.
+        ///
+        /// A modal tip stops the world: it sets <c>Time.timeScale</c> to zero so the sowing
+        /// animation and the game clock do not run on behind the card. That is right in a game
+        /// this device owns and wrong in one it shares, for two reasons. The clock on the other
+        /// phone keeps running, so a player who reads a tip comes back to two devices that
+        /// disagree about how long the game has taken. And PUN only dispatches incoming messages
+        /// while the clock is running, so every move the opponent makes queues up unseen behind
+        /// the card and arrives in a rush when it goes.
+        ///
+        /// Tips are not lost, only postponed: a suppressed tip is not marked as shown, so it is
+        /// still waiting the next time the player is offline. Which is the other half of the
+        /// argument — being taught the game is something to do against the computer, at your own
+        /// pace, and not while somebody is waiting for your move.
+        /// </summary>
+        public static bool Suppressed { get; private set; }
+
+        /// <summary>
+        /// Holds tips back, or lets them through again. Called as each game starts, so the answer
+        /// is always the mode actually being played.
+        /// </summary>
+        public static void SetSuppressed(bool value)
+        {
+            if (Suppressed == value) return;
+            Suppressed = value;
+
+            // A tip already on screen when a suppressed mode begins would keep the world frozen
+            // into a game that is not allowed to freeze.
+            if (value) instance?.ForceHide();
+        }
+
         public void ShowTip(TutorialTip tip, System.Action onDismissed = null)
         {
+            if (Suppressed) return;
             if (!tipsEnabled || !Tips.ContainsKey(tip)) return;
             if (ShowCount(tip) >= Tips[tip].MaxShows) return;
             if (IsQueued(tip) || (showing && current == tip)) return;

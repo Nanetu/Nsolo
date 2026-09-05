@@ -18,6 +18,14 @@ namespace NsoloGame.Core
         private static long[] zobristTable;
 
         /// <summary>
+        /// Folded in when player 2 is to move, so two positions with the same stones but opposite
+        /// sides to move hash differently. Without it they share a transposition entry and read back
+        /// each other's scores — a stored score is only meaningful for the side that was on move
+        /// when it was computed.
+        /// </summary>
+        private static long zobristPlayer2ToMove;
+
+        /// <summary>
         /// Initialize Zobrist hashing table (call once at app startup).
         /// </summary>
         public static void InitializeZobrist()
@@ -32,6 +40,10 @@ namespace NsoloGame.Core
             {
                 zobristTable[i] = ((long)random.Next() << 32) | (uint)random.Next();
             }
+
+            // Drawn after the table so the pit keys keep the values they had before the
+            // side-to-move key existed, and the seeded sequence stays reproducible.
+            zobristPlayer2ToMove = ((long)random.Next() << 32) | (uint)random.Next();
         }
 
         /// <summary>
@@ -80,6 +92,10 @@ namespace NsoloGame.Core
                     stoneCount = HoleCount;
                 hash ^= zobristTable[i * (HoleCount + 1) + stoneCount];
             }
+
+            if (CurrentPlayer == 2)
+                hash ^= zobristPlayer2ToMove;
+
             return hash;
         }
 

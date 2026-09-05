@@ -48,15 +48,47 @@ colliders that never move.
 
 ## Phase 3 — Photon online
 
-- [ ] **Settle the scope question with the supervisor**: play-with-a-friend-by-code vs public
-      matchmaking with ranking. Gates everything else.
-- [ ] Check Photon's current SDK lineup (it shifts), add the package — not in `manifest.json` today
-- [ ] Room join by code; seat assignment; both-ready handshake
-- [ ] Move sync via `RaiseEvent`: send `(row, col)`, rotate at the boundary, apply locally
-- [ ] Client-authoritative with local validation — both clients run the identical deterministic
-      `GameEngine`, so each rejects illegal opponent moves itself
-- [ ] Disconnect, rejoin, and turn-timeout behaviour
-- [ ] Rematch flow
+Code complete 2026-08-13; **UI not built** — see `docs/online-wiring.md` for what to assemble.
+
+- [x] **Scope settled**: play-with-a-friend-by-code. No matchmaking, no ranking.
+- [x] PUN 2.55 imported. Its asmdefs are auto-referenced, so `Assembly-CSharp` needs no asmdef.
+      **The App ID is still empty** in `PhotonServerSettings.asset` — nothing connects until it is set.
+- [x] Room create/join by 6-character code. Collision handling is "try to create, regenerate on
+      `GameIdAlreadyExists`" rather than a lobby pre-check, which cannot race. Alphabet excludes
+      `I L O 0 1`.
+- [x] Seat assignment: creator is player 1, joiner is player 2, captured once so PUN's master-client
+      migration cannot renumber a seat mid-game.
+- [x] Move sync via `RaiseEvent`, one event code, JSON payloads.
+- [x] **Host-authoritative**, not client-authoritative — the user changed this. The host runs the
+      real `GameEngine`; the client sends a pit and waits. The client's own legality check is a
+      responsiveness pre-filter only.
+- [x] Simultaneous formation exchange: both arrange at once, host assembles the 32-pit board and
+      draws for who opens.
+- [x] Disconnect handling: plain-language modal, dimmed backdrop, offers menu or a local game.
+- [ ] Rejoin / turn-timeout — deliberately out of scope this pass, see below.
+- [ ] Rematch flow — deliberately out of scope this pass.
+
+**No rotation at the network boundary was needed.** The Phase 2 note turned out to settle it: the
+flip orbits the *camera*, stones sit at absolute world positions, and input is a raycast against pit
+colliders that never move. So the joiner parks their camera on their own side once at match start
+and both devices speak identical board coordinates for the whole match. The `r → 3-r, c → 7-c`
+mapping is real (with a **+8 path-index offset**, which the earlier note omitted) but is not used.
+
+Architecture, for the record — the layering exists so persistence can be added without touching the
+rules:
+
+```
+PhotonMatchTransport   ← the only file that references Photon. Carries strings.
+        ↕ IMatchTransport
+NetworkMatch           ← host authority, protocol, BoardStateChanged event. No Photon types.
+        ↕ MoveResult
+GameController         ← PlayMoveResult(result) animates whatever it is handed.
+        ↕
+GameEngine             ← untouched. Never sees a network type.
+```
+
+`NetworkMatch.BoardStateChanged` fires after every authoritative change and is the intended hook for
+save-after-each-move. Nothing downstream of it can affect the rules.
 
 ## Phase 4 — Identity and stats
 

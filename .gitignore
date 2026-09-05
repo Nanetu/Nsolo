@@ -11,6 +11,7 @@ MemoryCaptures/
 /Assets/TextMesh Pro
 /Assets/textures
 Assets/Materials/Fonts
+/Assets/Audio
 
 # Visual Studio / VS Code files
 .vs/
@@ -31,3 +32,12 @@ Assets/Materials/Fonts
 # Unused 37MB intermediate export
 /Assets/Audio/artifact.mp3_trimmed.wav
 /Assets/Audio/artifact.mp3_trimmed.wav.meta
+# Holds a Figma personal access token in plaintext. Never commit.
+Assets/Materials/Menu/Figma/Figma Downloader.asset
+Assets/Materials/Menu/Figma/Figma Downloader.asset.meta
+
+# Raw Figma document (15MB, read directly by tooling; not a Unity asset).
+FigmaSource/
+Assets/FigmaSource/
+
+nul

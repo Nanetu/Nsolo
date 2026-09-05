@@ -221,7 +221,23 @@ namespace NsoloGame.Unity
             sfxSource.PlayOneShot(clip, Mathf.Clamp01(sfxVolume * volumeScale));
         }
 
-        public void PlayUiClick() => PlaySfx(uiClick);
+        /// <summary>
+        /// Frame the click last played on, so one tap makes one sound.
+        ///
+        /// <see cref="UIClickSound"/> subscribes every button, and several handlers still call
+        /// Click() themselves; a button whose handler does both would otherwise play two copies a
+        /// microsecond apart, which is audible as a flam rather than as a louder click. One click
+        /// per frame is a true statement about taps regardless of how many callers agree on it.
+        /// </summary>
+        private int lastClickFrame = -1;
+
+        public void PlayUiClick()
+        {
+            if (lastClickFrame == Time.frameCount) return;
+            lastClickFrame = Time.frameCount;
+
+            PlaySfx(uiClick);
+        }
         public void PlayPitPickup() => PlaySfx(pitPickup);
         public void PlayStoneDrop() => PlaySfx(stoneDrop);
         public void PlayCapture() => PlaySfx(capture);
@@ -253,6 +269,17 @@ namespace NsoloGame.Unity
             }
             return instance;
         }
+
+        /// <summary>
+        /// The clip assigned to Stone Drop, for the board animator to borrow.
+        ///
+        /// The stone sounds are played by <see cref="PitStoneAnimator"/> through its own AudioSource
+        /// — it fires one per landing, mid-animation, which is not something a static call can time.
+        /// But the clip should still be chosen in one place, so this hands it over rather than
+        /// making the Inspector carry the same decision twice. Before this, assigning Stone Drop
+        /// here did nothing at all: nothing in the project ever read it.
+        /// </summary>
+        public static AudioClip StoneDropClip => Active()?.stoneDrop;
 
         public static void Click() => Active()?.PlayUiClick();
         public static void Popup() => Active()?.PlayPopup();

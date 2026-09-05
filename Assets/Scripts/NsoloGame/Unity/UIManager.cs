@@ -8,6 +8,18 @@ using NsoloGame.Core;
 
 namespace NsoloGame.Unity
 {
+    /// <summary>
+    /// Which of the three jobs the bottom pill is doing. Named rather than inferred from the label,
+    /// so the words on the button stay a presentation detail and can be changed or translated
+    /// without silently repointing which button appears.
+    /// </summary>
+    public enum HudActionRole
+    {
+        Start,
+        Hint,
+        Forfeit,
+    }
+
     public class UIManager : MonoBehaviour
     {
         [Header("Board")]
@@ -19,26 +31,36 @@ namespace NsoloGame.Unity
         [SerializeField] private bool showStartingBoardIfNoControllerRefresh = true;
 
         [Header("HUD — Status")]
-        [SerializeField] private Canvas hudCanvas;
         [SerializeField] private TMP_Text turnStatusText;
         [SerializeField] private TMP_Text timerText;
 
         [Header("HUD — Scores")]
         [SerializeField] private TMP_Text playerScoreText;
         [SerializeField] private TMP_Text aiScoreText;
+        [Tooltip("Caption above the left-hand score box, which is always the opponent's. Reads " +
+                 "COMPUTER, PLAYER 1, or the opponent's name online.")]
+        [SerializeField] private TMP_Text opponentNameText;
+        [Tooltip("Caption above the right-hand score box, which is always this device's.")]
+        [SerializeField] private TMP_Text playerNameText;
 
         [Header("HUD — Last Move")]
         [SerializeField] private TMP_Text lastMoveText;
 
         [Header("HUD — Buttons")]
         [SerializeField] private Button undoButton;
-        [Tooltip("The bottom-centre pill. It doubles as START while the player is arranging their " +
-                 "stones and as HINT once play begins, so both share one spot on the background art.")]
+        [Tooltip("The bottom-centre pill. On its own it doubles as START, HINT and FORFEIT. With a " +
+                 "second button tagged below, this one is the START half.")]
         [SerializeField] private Button actionButton;
+        [Tooltip("Optional HINT pill sharing the action pill's spot, so it can be styled apart from " +
+                 "START. Normally found by its tag rather than dragged in here.")]
+        [SerializeField] private Button hintButton;
+        [SerializeField] private TMP_Text hintLabel;
+        [Tooltip("Optional FORFEIT pill, same spot again, for the two-player modes.")]
+        [SerializeField] private Button forfeitButton;
+        [SerializeField] private TMP_Text forfeitLabel;
         [SerializeField] private TMP_Text actionButtonLabel;
 
         [Header("Highlighting")]
-        [SerializeField] private Color normalColor = Color.white;
         [SerializeField] private Color legalMoveColor = new Color(1f, 0.85f, 0.05f);
         [SerializeField] private Color illegalMoveColor = Color.red;
 
@@ -83,8 +105,39 @@ namespace NsoloGame.Unity
         {
             Log("Start()");
 
+            // After NsoloUI has built its register — see NsoloUI.Bootstrap for why that cannot
+            // happen in Awake.
+            AdoptRebuiltUI();
+
             if (showStartingBoardIfNoControllerRefresh)
                 StartCoroutine(SpawnStartingBoardFallbackNextFrame());
+        }
+
+        /// <summary>
+        /// Points every HUD reference at whatever has been tagged for it, keeping the slot's
+        /// contents otherwise. The counterpart of the same pass in MenuManager and ProfileManager.
+        ///
+        /// The HUD was the last part of the game still wired entirely by hand, which is why it was
+        /// also the part with slots nobody had noticed were empty. Two of its labels — the two pill
+        /// captions — are found inside their own button when the slot is blank, so they were never
+        /// worth filling; the rest now answer to a tag, and a tag can be checked by
+        /// <c>Nsolo &gt; Check UI Wiring</c> without play mode.
+        /// </summary>
+        private void AdoptRebuiltUI()
+        {
+            turnStatusText  = Pick(NsoloUI.Label(ElementId.HudStatusLabel),        turnStatusText);
+            timerText       = Pick(NsoloUI.Label(ElementId.HudTimerLabel),         timerText);
+            playerScoreText = Pick(NsoloUI.Label(ElementId.HudPlayerScoreLabel),   playerScoreText);
+            aiScoreText     = Pick(NsoloUI.Label(ElementId.HudOpponentScoreLabel), aiScoreText);
+            lastMoveText    = Pick(NsoloUI.Label(ElementId.HudLastMoveLabel),      lastMoveText);
+
+            opponentNameText = Pick(NsoloUI.Label(ElementId.HudOpponentNameLabel), opponentNameText);
+            playerNameText   = Pick(NsoloUI.Label(ElementId.HudPlayerNameLabel),   playerNameText);
+
+            undoButton   = Pick(NsoloUI.Button(ElementId.HudUndo),    undoButton);
+            actionButton = Pick(NsoloUI.Button(ElementId.HudAction),  actionButton);
+            hintButton   = Pick(NsoloUI.Button(ElementId.HudHint),    hintButton);
+            forfeitButton = Pick(NsoloUI.Button(ElementId.HudForfeit), forfeitButton);
         }
 
         private void InitializeBoardUI()
@@ -236,6 +289,21 @@ namespace NsoloGame.Unity
             ShowLastMove(winner == 1 ? "Victory!" : "Defeated!");
         }
 
+        /// <summary>
+        /// Announces an online result. Separate from <see cref="ShowGameOver"/> because "you" is not
+        /// player 1 here — it is whichever seat this device is playing, which is player 2 for
+        /// whoever joined the room.
+        /// </summary>
+        public void ShowGameOverOnline(int winner, int localPlayer)
+        {
+            ClearHighlights();
+            StopTurnTimer();
+
+            bool won = winner == localPlayer;
+            ShowStatus(won ? "You win!" : "Opponent wins!");
+            ShowLastMove(won ? "Victory!" : "Defeated!");
+        }
+
         public void FlashHintPit(int row, int col)
         {
             if (stoneVisualizer != null)
@@ -248,18 +316,72 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
-        /// Relabels the shared bottom pill. The button's own Image is transparent (the pill is
-        /// painted into the background art), so the disabled tint never shows — the label is faded
-        /// by hand instead to signal when the button is dead.
+        /// Points the bottom pill at whichever job the state calls for.
+        ///
+        /// Two shapes are supported, and which one runs depends only on whether a second pill has
+        /// been tagged <see cref="ElementId.HudHint"/> or <see cref="ElementId.HudForfeit"/>:
+        ///
+        /// One button — the original. It stays put and its label changes between START, HINT and
+        /// FORFEIT. Everything still works; the one look has to serve all three.
+        ///
+        /// Two buttons — <paramref name="isStart"/> decides which is on screen. START gets its own
+        /// object, HINT and FORFEIT share the other, and each can be styled for the job it does.
+        /// They sit in the same place, so only one is ever visible.
+        ///
+        /// The buttons' own Images are transparent where the pill is painted into the background
+        /// art, so a disabled tint would never show. The label is faded by hand instead.
         /// </summary>
-        public void SetActionButton(string label, bool interactable)
+        public void SetActionButton(string label, bool interactable, HudActionRole role = HudActionRole.Start)
         {
-            if (actionButton != null) actionButton.interactable = interactable;
+            Button start = actionButton;
+            Button hint = hintButton;
+            Button forfeit = forfeitButton;
 
-            if (actionButtonLabel == null) return;
-            actionButtonLabel.text = label;
-            Color c = actionButtonLabel.color;
-            actionButtonLabel.color = new Color(c.r, c.g, c.b, interactable ? 1f : 0.4f);
+            if (hint == null && forfeit == null)
+            {
+                // Nothing else tagged, so the original one-pill behaviour: always on screen,
+                // relabelled between START, HINT and FORFEIT.
+                Apply(start, LabelFor(start, actionButtonLabel), label, interactable, true);
+                return;
+            }
+
+            // A half-finished setup — say HINT built but FORFEIT not yet — must not leave the board
+            // with no pill at all, so a missing button falls back to the one that is always there.
+            Button wanted = role == HudActionRole.Hint ? hint
+                          : role == HudActionRole.Forfeit ? forfeit
+                          : start;
+            if (wanted == null) wanted = start;
+
+            Apply(start, LabelFor(start, actionButtonLabel), label, interactable, start == wanted);
+            Apply(hint, LabelFor(hint, hintLabel), label, interactable, hint == wanted);
+            Apply(forfeit, LabelFor(forfeit, forfeitLabel), label, interactable, forfeit == wanted);
+        }
+
+        /// <summary>
+        /// The label a pill writes into: whatever was dragged into the slot, else the TMP_Text the
+        /// button already carries. Duplicating a button brings its label along, so looking inside
+        /// saves wiring a slot for the copy — and a pill with no text at all is still valid, since
+        /// the word can be part of the artwork.
+        /// </summary>
+        private static TMP_Text LabelFor(Button button, TMP_Text assigned)
+        {
+            if (assigned != null) return assigned;
+            return button == null ? null : button.GetComponentInChildren<TMP_Text>(true);
+        }
+
+        private static void Apply(Button button, TMP_Text label, string text, bool interactable, bool visible)
+        {
+            if (button != null)
+            {
+                if (button.gameObject.activeSelf != visible) button.gameObject.SetActive(visible);
+                button.interactable = interactable;
+            }
+
+            if (label == null) return;
+
+            label.text = text;
+            Color c = label.color;
+            label.color = new Color(c.r, c.g, c.b, interactable ? 1f : 0.4f);
         }
 
         public IEnumerator PlayMoveAnimation(GameBoard startingBoard, MoveResult moveResult)
@@ -350,6 +472,89 @@ namespace NsoloGame.Unity
         // Score is the total number of stones still sitting in each player's own pits
         // (not the captured/store count), so it starts at 32 and only drops when the
         // opponent captures from that player's side.
+        // Which seat each score box belongs to. The two boxes are fixed on screen — aiScoreText is
+        // the left-hand one and playerScoreText the right, whatever their names suggest — but the
+        // three backgrounds label them differently:
+        //
+        //   vs Computer    COMPUTER SCORE  |  YOUR SCORE      left = the AI,      right = you
+        //   local 2-player PLAYER 1 SCORE  |  PLAYER 2 SCORE  left = player 1,    right = player 2
+        //   online         SCORE           |  YOUR SCORE      left = the opponent, right = you
+        //
+        // Hard-wiring left to player 2 was right only for the first of those. In hot-seat it put
+        // player 2's total under a box captioned PLAYER 1, and online it would have done the same to
+        // whoever joined, since the joiner is player 2 and "yours" is on the right for both of them.
+        private int scoreLeftPlayer = 2;
+        private int scoreRightPlayer = 1;
+
+        /// <summary>
+        /// Says which seat each score box is captioned for. Called when a game starts, once the mode
+        /// — and online, the local seat — is known.
+        /// </summary>
+        public void SetScoreSides(int leftPlayer, int rightPlayer)
+        {
+            scoreLeftPlayer = leftPlayer;
+            scoreRightPlayer = rightPlayer;
+        }
+
+        /// <summary>
+        /// Captions the two score boxes for the mode being played. Left box is always the
+        /// opponent's, right box always this device's.
+        ///
+        /// These used to be part of the background image — a different picture per mode, each with
+        /// its captions already lettered on — so only the online one needed a label, and only
+        /// because a name cannot be painted in advance. The rebuilt HUD draws the captions as text,
+        /// so all three modes have to be spelled out here.
+        ///
+        /// <paramref name="opponentName"/> is used in <see cref="GameMode.Online"/> only, and falls
+        /// back to OPPONENT while the nickname is still settling.
+        /// </summary>
+        public void SetSeatNames(GameMode mode, string opponentName = null)
+        {
+            TMP_Text opponent = opponentNameText;
+            TMP_Text player = playerNameText;
+
+            string opponentCaption;
+            string playerCaption;
+
+            switch (mode)
+            {
+                case GameMode.VersusHuman:
+                    // Neither seat is "you" — both are people in the room, so they are named by
+                    // seat. Player 1 is the left box because that is the seat the left box holds.
+                    opponentCaption = "PLAYER 1";
+                    playerCaption = "PLAYER 2";
+                    break;
+
+                case GameMode.Online:
+                    opponentCaption = string.IsNullOrWhiteSpace(opponentName)
+                        ? "OPPONENT"
+                        : opponentName.ToUpperInvariant();
+                    playerCaption = "YOU";
+                    break;
+
+                default:
+                    opponentCaption = "COMPUTER";
+                    playerCaption = "YOU";
+                    break;
+            }
+
+            if (opponent != null)
+            {
+                opponent.gameObject.SetActive(true);
+                opponent.text = opponentCaption;
+            }
+
+            if (player != null)
+            {
+                player.gameObject.SetActive(true);
+                player.text = playerCaption;
+            }
+        }
+
+        /// <summary>A tagged element wins over whatever was dragged into the slot, as elsewhere.</summary>
+        private static T Pick<T>(T rebuilt, T current) where T : UnityEngine.Object
+            => rebuilt != null ? rebuilt : current;
+
         private void UpdateScores(GameBoard board)
         {
             if (board == null) return;
@@ -362,8 +567,10 @@ namespace NsoloGame.Unity
                 p2Stones += board.Get(2, c) + board.Get(3, c);
             }
 
-            if (playerScoreText != null) playerScoreText.text = p1Stones.ToString("00");
-            if (aiScoreText != null) aiScoreText.text = p2Stones.ToString("00");
+            int Stones(int player) => player == 1 ? p1Stones : p2Stones;
+
+            if (aiScoreText != null) aiScoreText.text = Stones(scoreLeftPlayer).ToString("00");
+            if (playerScoreText != null) playerScoreText.text = Stones(scoreRightPlayer).ToString("00");
         }
 
         private IEnumerator FlashCoroutine(int row, int col, Color color, float duration)
