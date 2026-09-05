@@ -18,6 +18,31 @@ namespace NsoloGame.Net
     }
 
     /// <summary>
+    /// A connection has dropped, but the match is not over yet — the seat is being held while
+    /// whoever lost it tries to get back.
+    ///
+    /// The distinction this carries is the one the two players experience differently. A player
+    /// whose own signal went is watching their phone reconnect and knows exactly what happened; the
+    /// one still connected sees nothing at all unless told, and "your opponent is reconnecting" is
+    /// a different sentence from "reconnecting". Same event, two readings, so the flag travels with
+    /// it rather than each side inferring it.
+    /// </summary>
+    public readonly struct MatchInterruption
+    {
+        /// <summary>True when it was our connection that dropped, false when it was theirs.</summary>
+        public readonly bool Local;
+
+        /// <summary>How long the seat is held before the match is called off, in seconds.</summary>
+        public readonly float GraceSeconds;
+
+        public MatchInterruption(bool local, float graceSeconds)
+        {
+            Local = local;
+            GraceSeconds = graceSeconds;
+        }
+    }
+
+    /// <summary>
     /// The seam between the game and whatever is carrying its messages.
     ///
     /// This is the whole reason the rest of the online code contains no Photon types. Everything
@@ -80,6 +105,24 @@ namespace NsoloGame.Net
         event Action<MatchEndReason> MatchEnded;
 
         /// <summary>
+        /// Somebody's connection dropped and the match is on hold while they come back. Play should
+        /// stop, but nothing should be torn down: <see cref="MatchResumed"/> or
+        /// <see cref="MatchEnded"/> follows, and only the second of those is final.
+        /// </summary>
+        event Action<MatchInterruption> MatchInterrupted;
+
+        /// <summary>
+        /// Everyone is back in the room and play can continue. Always preceded by
+        /// <see cref="MatchInterrupted"/>.
+        ///
+        /// This says the connection is whole again, not that the two boards agree — a device that
+        /// was away missed whatever happened while it was, and neither side knows how much. Putting
+        /// that right is the layer above's job (see <c>NetworkMatch</c>'s resume exchange), which is
+        /// why this carries no state: the transport has none to carry.
+        /// </summary>
+        event Action MatchResumed;
+
+        /// <summary>
         /// Starts connecting without asking for a room yet, so the wait happens while the player is
         /// still reading the screen rather than after they press something. Safe to call repeatedly.
         /// </summary>
@@ -98,10 +141,23 @@ namespace NsoloGame.Net
         /// </summary>
         void Broadcast(string json);
 
-        /// <summary>Sends a request to the host alone. Used by the client to ask for a move.</summary>
+        /// <summary>
+        /// Sends a request for the host to act on. Used by the client to ask for a move.
+        ///
+        /// "For the host to act on" rather than "to the host alone": who the host is, is a seat
+        /// this game assigned, not a role the carrier decides, and an implementation is free to
+        /// deliver this to everyone as long as only the host acts. That distinction is what keeps
+        /// authority stable across a reconnect — see <c>PhotonMatchTransport.SendToHost</c>.
+        /// </summary>
         void SendToHost(string json);
 
-        /// <summary>Leaves the room and stops raising events. Safe to call when not in a room.</summary>
+        /// <summary>
+        /// Leaves the room for good and stops raising events. Safe to call when not in a room.
+        ///
+        /// Final, unlike a dropped connection: this is the player choosing to go, so no seat is
+        /// held for them and the opponent is told the match is over rather than being asked to
+        /// wait out a grace period nobody is coming back from.
+        /// </summary>
         void Leave();
     }
 }

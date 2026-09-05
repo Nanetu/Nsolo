@@ -127,6 +127,12 @@ namespace NsoloGame.Unity
             sfxVolumeSlider    = NsoloUI.Slider(ElementId.PauseSfxSlider);
             vibrationToggle    = NsoloUI.Toggle(ElementId.PauseVibrationToggle);
             tutorialTipsToggle = NsoloUI.Toggle(ElementId.PauseTipsToggle);
+
+            // Built under the same canvas the menus live on, so it shares their sorting order and
+            // needs no camera or layer of its own. The main menu is used to find that canvas rather
+            // than a slot, for the reason the screens above are: a slot here would be one more
+            // thing that can point at the wrong object without saying so.
+            MenuBackdrop.Ensure(mainMenuPanel != null ? mainMenuPanel.transform.parent : null);
         }
 
         private static GameObject RequireScreen(PanelId id)
@@ -175,7 +181,14 @@ namespace NsoloGame.Unity
             Time.timeScale = 1f;
             isPaused = false;
             ResolveGameController();
-            gameController?.SetPaused(false);
+
+            // Ends the game rather than resuming it. This used to be SetPaused(false), which told a
+            // game the player had just walked out on to carry on running: the sowing coroutine kept
+            // stepping behind the menu and kept playing stone sounds, which is what "I can still
+            // hear the game from the main menu" was. There is no way back to this game from here —
+            // every route out of the menu starts a new one — so stopping it is the honest call.
+            gameController?.AbandonGame();
+
             SetGameplayVisible(false);
             // Back to the standard chrome, so the menu is never sitting on two-player art.
             ApplyGameplayChrome(GameMode.VersusComputer);
@@ -1101,6 +1114,15 @@ namespace NsoloGame.Unity
             // enough to stop it being tapped. Telling the controller outright is.
             ResolveGameController();
             gameController?.SetBoardInputEnabled(visible);
+
+            // And not enough to stop it being seen, either. The menus only looked opaque because
+            // each carries a full-screen image; the moment two of them crossfade, the board shows
+            // through the gap. This is the one question that has the same answer as "is the HUD
+            // hidden?", which is why it is asked here rather than at every call site: the screens
+            // that legitimately sit over a live game — pause, game over, the rules opened from
+            // pause — go up through SetPanelActive and never come through here at all, so the board
+            // stays visible behind them exactly as it should.
+            MenuBackdrop.Show(!visible);
         }
 
         private void ResolveGameController()

@@ -67,6 +67,8 @@ namespace NsoloGame.Net
 
         private readonly Action<string> messageHandler;
         private readonly Action<MatchEndReason> matchEndedHandler;
+        private readonly Action<MatchInterruption> matchInterruptedHandler;
+        private readonly Action matchResumedHandler;
 
         public NetworkMatch(IMatchTransport transport, GameEngine engine)
         {
@@ -78,9 +80,13 @@ namespace NsoloGame.Net
             // unsubscribing would keep handling messages for a game that no longer exists.
             messageHandler = HandleMessage;
             matchEndedHandler = reason => MatchEnded?.Invoke(reason);
+            matchInterruptedHandler = interruption => MatchInterrupted?.Invoke(interruption);
+            matchResumedHandler = HandleTransportResumed;
 
             transport.MessageReceived += messageHandler;
             transport.MatchEnded += matchEndedHandler;
+            transport.MatchInterrupted += matchInterruptedHandler;
+            transport.MatchResumed += matchResumedHandler;
         }
 
         /// <summary>
@@ -90,6 +96,8 @@ namespace NsoloGame.Net
         {
             transport.MessageReceived -= messageHandler;
             transport.MatchEnded -= matchEndedHandler;
+            transport.MatchInterrupted -= matchInterruptedHandler;
+            transport.MatchResumed -= matchResumedHandler;
         }
 
         /// <summary>
@@ -151,6 +159,35 @@ namespace NsoloGame.Net
 
         /// <summary>The match cannot continue. Drives the disconnect modal.</summary>
         public event Action<MatchEndReason> MatchEnded;
+
+        /// <summary>
+        /// A connection dropped and the match is being held open. Play stops; nothing is torn down.
+        /// Passed straight through from the transport — this layer has nothing to add to it.
+        /// </summary>
+        public event Action<MatchInterruption> MatchInterrupted;
+
+        /// <summary>
+        /// The connection is whole again, on both devices. Play can continue and the waiting
+        /// message can come down.
+        ///
+        /// Says nothing about the position, which is the next question and not always the same
+        /// answer: the host never lost its board and has nothing to restore, while a client may be
+        /// several moves behind and finds out through <see cref="MatchResynced"/> a round trip
+        /// later. Splitting the two keeps "you are connected" from having to wait on "and here is
+        /// where we got to", which would leave the host frozen behind its own broadcast.
+        /// </summary>
+        public event Action MatchResumed;
+
+        /// <summary>
+        /// The authoritative position, after a reconnect left this device unsure of it. Carries the
+        /// board and whose turn it is, exactly as <see cref="MatchStarted"/> does — but this is a
+        /// game being picked up rather than begun, and the two must not be confused: one restores a
+        /// position, the other opens a new one.
+        ///
+        /// Fires on the client only, and only when there was a game in progress to restore. The
+        /// host is the source of this and has nothing to learn from it.
+        /// </summary>
+        public event Action<GameBoard, int> MatchResynced;
 
         /// <summary>
         /// The two boards disagreed. This should be unreachable — the engine is deterministic and
@@ -286,6 +323,12 @@ namespace NsoloGame.Net
                     break;
                 case NetProtocol.ActionForfeit:
                     HandleForfeit(json);
+                    break;
+                case NetProtocol.ActionResumeRequest:
+                    HandleResumeRequest();
+                    break;
+                case NetProtocol.ActionResumeState:
+                    HandleResumeState(json);
                     break;
                 default:
                     // Unknown actions are dropped rather than treated as errors, so a later build
@@ -484,6 +527,97 @@ namespace NsoloGame.Net
             if (message == null) return;
 
             Forfeited?.Invoke(message.player);
+        }
+
+        // ── Resuming after a drop ─────────────────────────────────────────
+
+        /// <summary>
+        /// The connection is whole again. What that means depends on which seat this is.
+        ///
+        /// The host holds the only authoritative board, so it simply publishes it and everyone —
+        /// itself included — lands on it. A client cannot know whether the host noticed the
+        /// interruption at all, so it asks; a host that already broadcast will answer twice, and
+        /// the second answer is identical to the first, which is the cheapest possible way to be
+        /// certain rather than hopeful.
+        ///
+        /// Note that this fires on both devices, not only the one that dropped. The player who
+        /// stayed connected also spent that time with a board nobody was moving, and re-agreeing
+        /// the position costs one packet whether or not it had drifted.
+        /// </summary>
+        private void HandleTransportResumed()
+        {
+            if (IsHost) BroadcastResumeState();
+            else transport.SendToHost(NetProtocol.ToJson(new ResumeRequestMessage(LocalPlayer)));
+
+            // Raised now rather than when the state comes back, and on both devices. The host has
+            // nothing to wait for — it is the authority and its board never left — and making it
+            // wait for its own broadcast to return would freeze the player who never dropped, for
+            // a round trip, every time the other one hiccuped.
+            MatchResumed?.Invoke();
+        }
+
+        private void HandleResumeRequest()
+        {
+            // Only the authority can answer this, and only it should: a client replying with its
+            // own board would be handing a returning player a position nobody validated.
+            if (!IsHost) return;
+
+            BroadcastResumeState();
+        }
+
+        /// <summary>
+        /// Publishes the authoritative position to everyone, the host included.
+        ///
+        /// Sent even before play begins, when there is no board to send. That case is not skipped,
+        /// because "we have not started yet" is itself the answer a player who dropped during the
+        /// arrangement phase needs — without it they would be left waiting on a packet that never
+        /// comes, which is indistinguishable from still being disconnected.
+        /// </summary>
+        private void BroadcastResumeState()
+        {
+            int[] cells = Board != null
+                ? (int[])Board.Board.Clone()
+                : new int[GameBoard.HoleCount];
+
+            transport.Broadcast(NetProtocol.ToJson(
+                new ResumeStateMessage(cells, CurrentPlayer, started && Board != null)));
+        }
+
+        /// <summary>
+        /// Adopting the host's position after a reconnect.
+        ///
+        /// Unconditional, unlike <see cref="HandleMoveResult"/>, which replays a move locally and
+        /// checks its answer. There is nothing to check against here: this device was away and has
+        /// no idea what it missed, so its own board is not evidence of anything and disagreeing
+        /// with the host would be the bug rather than the detection of one.
+        /// </summary>
+        private void HandleResumeState(string json)
+        {
+            // The host is the authority and has just sent this to itself along with everyone else.
+            // Adopting its own packet would be harmless today and wrong in principle — the only
+            // board it should ever take is the one it computed.
+            if (IsHost) return;
+
+            ResumeStateMessage message = NetProtocol.FromJson<ResumeStateMessage>(json);
+            if (message?.board == null || message.board.Length != GameBoard.HoleCount) return;
+
+            if (!message.started)
+            {
+                // Still arranging. Nothing to restore, and overwriting the formation this player is
+                // in the middle of laying out would be worse than leaving them to it.
+                return;
+            }
+
+            started = true;
+            Board = BoardFrom(message.board, message.currentPlayer);
+            CurrentPlayer = message.currentPlayer;
+
+            // A move that was in flight when the connection went is not coming back. The position
+            // in hand is the position, and the next request is free to proceed from it.
+            awaitingOwnBroadcast = false;
+
+            BoardStateChanged?.Invoke(Board);
+            MatchResynced?.Invoke(Board, CurrentPlayer);
         }
 
         // ── Helpers ───────────────────────────────────────────────────────

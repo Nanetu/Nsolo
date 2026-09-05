@@ -347,8 +347,16 @@ namespace NsoloGame.Unity
             uiManager.ClearHighlights();
             RefreshActionButton();
 
-            // Arranging happens in silence — the music waits for START.
-            AudioManager.Silence();
+            // The menu loop carries on through the arrangement phase, and the game loop takes over
+            // at START. Arranging used to be silent — a deliberate choice that read as a bug from
+            // the player's seat: the music cuts out the moment the board appears, and the first
+            // thing the game does after they pick a mode is go quiet on them. Holding the menu
+            // track here keeps a continuous bed under the whole pre-game, and makes committing the
+            // formation the moment the score changes rather than the moment sound returns.
+            //
+            // Costs nothing when arriving from a menu, which is every path here: PlayMusic ignores
+            // a request for the track already running, so this is a no-op rather than a restart.
+            AudioManager.StartMenuMusic();
             TutorialCoach.Show(TutorialTip.ArrangeStones);
         }
 
@@ -557,6 +565,9 @@ namespace NsoloGame.Unity
                 HandleHotSeatMoveResult();
 
             HandleHintResult();
+
+            if (Interrupted) TickInterruptionCountdown();
+            if (resyncDeadline > 0f) CheckResyncDeadline();
         }
 
         /// <summary>
@@ -1083,6 +1094,9 @@ namespace NsoloGame.Unity
             networkMatch.Forfeited += HandleForfeited;
             networkMatch.MatchEnded += HandleMatchEnded;
             networkMatch.Desynced += HandleDesynced;
+            networkMatch.MatchInterrupted += HandleMatchInterrupted;
+            networkMatch.MatchResumed += HandleMatchResumed;
+            networkMatch.MatchResynced += HandleMatchResynced;
 
             InitializeGame();
         }
@@ -1100,8 +1114,16 @@ namespace NsoloGame.Unity
             networkMatch.Forfeited -= HandleForfeited;
             networkMatch.MatchEnded -= HandleMatchEnded;
             networkMatch.Desynced -= HandleDesynced;
+            networkMatch.MatchInterrupted -= HandleMatchInterrupted;
+            networkMatch.MatchResumed -= HandleMatchResumed;
+            networkMatch.MatchResynced -= HandleMatchResynced;
 
             networkMatch = null;
+
+            // The countdown belongs to the match that just went away. Left running, it would tick
+            // down over whatever the player did next and end by announcing that a game they are no
+            // longer in has expired.
+            ClearInterruption();
         }
 
         /// <summary>
@@ -1317,6 +1339,175 @@ namespace NsoloGame.Unity
             uiManager.ShowLastMove("Re-synced with your opponent");
         }
 
+        // ── Interruptions (a dropped connection being waited out) ─────────
+
+        /// <summary>
+        /// When the current grace period runs out, on <see cref="Time.realtimeSinceStartup"/>, or
+        /// zero when nothing is being waited for. Real time, matching the transport's own clock, so
+        /// the number on screen is the number actually being counted.
+        /// </summary>
+        private float interruptionEndsAt;
+
+        /// <summary>Whose connection went, which decides which sentence the player is shown.</summary>
+        private bool interruptionIsLocal;
+
+        /// <summary>The last whole second put on screen, so the caption is rewritten once a second.</summary>
+        private int lastCountdownSecond = -1;
+
+        /// <summary>
+        /// When to give up on the host's position after reconnecting, or zero when not waiting.
+        ///
+        /// A client that is back on the network but has not been told where the game got to cannot
+        /// be allowed to sit there indefinitely. The host may have dropped in the same moment, or
+        /// left while we were away — in which case nothing is coming, and without a deadline the
+        /// player is left on a board that says "catching up" and never stops saying it. That is the
+        /// same class of failure as a latched flag freezing a match, and it gets the same treatment.
+        /// </summary>
+        private float resyncDeadline;
+
+        /// <summary>
+        /// How long the host has to answer a resume request. Generous next to a round trip, because
+        /// the connection has just been re-established and the first packets over it are the
+        /// slowest — but far short of the rejoin window, since by this point we are connected and a
+        /// silent host means something is actually wrong.
+        /// </summary>
+        private const float ResyncTimeoutSeconds = 12f;
+
+        private bool Interrupted => interruptionEndsAt > 0f;
+
+        /// <summary>
+        /// Somebody's connection dropped. The match is not over — the seat is held for a few minutes
+        /// — so this stops play and says what is happening rather than tearing anything down.
+        /// </summary>
+        private void HandleMatchInterrupted(MatchInterruption interruption)
+        {
+            if (mode != GameMode.Online || gameState == GameState.GameOver) return;
+
+            Log($"Online match interrupted (local={interruption.Local}), holding for {interruption.GraceSeconds:0}s.");
+
+            interruptionIsLocal = interruption.Local;
+            interruptionEndsAt = Time.realtimeSinceStartup + interruption.GraceSeconds;
+            lastCountdownSecond = -1;
+
+            // Arranging is left alone deliberately. Laying out your own half needs nobody else, and
+            // nothing is sent until START — so a player who was mid-formation can carry on with it
+            // while the connection sorts itself out, and finds their work still there either way.
+            // Freezing them would waste the wait and lose the arrangement if it ended badly.
+            if (gameState != GameState.PreGameFormation)
+            {
+                gameState = GameState.OnlineWaiting;
+                uiManager.ClearHighlights();
+                RefreshActionButton();
+            }
+
+            // The notification sting rather than the illegal-move one. Nobody did anything wrong.
+            AudioManager.Popup();
+            Haptics.Medium();
+            uiManager.ShowStatus(interruptionIsLocal ? "Reconnecting" : "Opponent lost connection");
+        }
+
+        /// <summary>
+        /// The connection is back. The host can carry straight on; a client has to be told where the
+        /// game got to before it can, because it has no way of knowing what it missed.
+        /// </summary>
+        private void HandleMatchResumed()
+        {
+            if (mode != GameMode.Online || !Interrupted) return;
+
+            Log("Online match resumed.");
+            ClearInterruption();
+
+            if (gameState == GameState.PreGameFormation)
+            {
+                // Never stopped arranging, so there is nothing to restart.
+                uiManager.ShowStatus("Arrange your side");
+                return;
+            }
+
+            if (networkMatch == null) return;
+
+            if (networkMatch.IsHost)
+            {
+                // The authority's board never went anywhere.
+                uiManager.ShowLastMove("Reconnected");
+                BeginOnlineTurn(networkMatch.CurrentPlayer);
+                return;
+            }
+
+            // Held inert until the host's position arrives. Showing a turn now would mean guessing
+            // from a board that is potentially several moves stale, and a highlighted pit the
+            // player is invited to tap is the worst possible thing to be wrong about.
+            uiManager.ShowStatus("Reconnected");
+            uiManager.ShowLastMove("Catching up with the game...");
+            resyncDeadline = Time.realtimeSinceStartup + ResyncTimeoutSeconds;
+        }
+
+        /// <summary>
+        /// The host's position, adopted after a reconnect. Client only — see
+        /// <see cref="NetworkMatch.MatchResynced"/>.
+        /// </summary>
+        private void HandleMatchResynced(GameBoard board, int currentPlayer)
+        {
+            if (mode != GameMode.Online || board == null) return;
+            if (gameState == GameState.GameOver) return;
+
+            Log($"Online match re-synced; it is player {currentPlayer}'s turn.");
+            resyncDeadline = 0f;
+
+            gameBoard = board.Clone();
+            uiManager.UpdateDisplay(gameBoard);
+            uiManager.ShowLastMove("Back in the game");
+
+            BeginOnlineTurn(currentPlayer);
+        }
+
+        private void ClearInterruption()
+        {
+            interruptionEndsAt = 0f;
+            interruptionIsLocal = false;
+            lastCountdownSecond = -1;
+            resyncDeadline = 0f;
+        }
+
+        /// <summary>
+        /// Gives up on a host that reconnected us and then said nothing. Reported as the opponent
+        /// having left, which by any measure that matters to the player is what has happened.
+        /// </summary>
+        private void CheckResyncDeadline()
+        {
+            if (Time.realtimeSinceStartup < resyncDeadline) return;
+
+            resyncDeadline = 0f;
+            Debug.LogWarning($"GameController: no position from the host within {ResyncTimeoutSeconds:0}s of reconnecting.");
+            EndOnlineMatch(MatchEndReason.OpponentLeft);
+        }
+
+        /// <summary>
+        /// Puts the remaining time on the board, once a second.
+        ///
+        /// A silent wait is indistinguishable from a frozen game, which is the thing a player does
+        /// worst with: they quit. A number going down says the game knows what is happening and that
+        /// there is a point at which it will stop — and it also tells them how long they have to
+        /// decide whether to wait, which is a decision they are entitled to make.
+        ///
+        /// Only the caption is driven here. The deadline itself belongs to the transport, which owns
+        /// the room and is the only thing that can actually end the match when it passes.
+        /// </summary>
+        private void TickInterruptionCountdown()
+        {
+            float remaining = interruptionEndsAt - Time.realtimeSinceStartup;
+            if (remaining < 0f) remaining = 0f;
+
+            int whole = Mathf.CeilToInt(remaining);
+            if (whole == lastCountdownSecond) return;
+            lastCountdownSecond = whole;
+
+            string clock = $"{whole / 60}:{whole % 60:00}";
+            uiManager.ShowLastMove(interruptionIsLocal
+                ? $"Trying to reconnect... {clock}"
+                : $"Waiting for your opponent... {clock}");
+        }
+
         private void HandleMatchEnded(MatchEndReason reason) => EndOnlineMatch(reason);
 
         /// <summary>
@@ -1362,6 +1553,11 @@ namespace NsoloGame.Unity
             gameState = GameState.GameOver;
             RefreshActionButton();
             AudioManager.Silence();
+
+            // The wait is over and it ended badly. Stopped before the closing message goes up, or
+            // the next tick would overwrite it with a countdown to something that has already
+            // happened.
+            ClearInterruption();
 
             // Said on the board as well as in the dialog, because the dialog can be dismissed: a
             // player who stays to read the final position would otherwise be looking at a board
@@ -1506,6 +1702,56 @@ namespace NsoloGame.Unity
             InitializeSystems();
             gameState = GameState.Initialising;
             InitializeGame();
+        }
+
+        /// <summary>
+        /// Puts the running game down for good, because the player has left it for the menu.
+        ///
+        /// Leaving used to go through <c>SetPaused(false)</c>, which is the opposite instruction:
+        /// it *resumes*. Everything the game had in flight carried on behind the menu — the sowing
+        /// coroutine kept stepping and kept playing stone sounds, the AI kept searching, and a hint
+        /// task kept running — which is why the board could still be heard from the main menu.
+        /// Pausing instead would have been just as wrong: a paused game is one you are coming back
+        /// to, and nothing here ever comes back. The game is over; this is what says so.
+        ///
+        /// Deliberately leaves the board as it stands rather than clearing it. Nothing is looking at
+        /// it — the menu is up and <see cref="SetBoardInputEnabled"/> has already been told — and
+        /// <see cref="InitializeGame"/> builds a fresh board for the next game anyway, so wiping it
+        /// here would only be work that shows up as a flicker if a menu ever animates over it.
+        /// </summary>
+        public void AbandonGame()
+        {
+            Log("AbandonGame()");
+
+            // Every worker first, so nothing can post a result into the teardown behind us.
+            CancelAiThinking();
+            CancelHintSearch();
+            CancelHotSeatTurn();
+
+            // The coroutine driving the current move, and the animation it was driving. Both are
+            // needed: stopping the coroutine leaves the animator mid-flight with its flags set, and
+            // cancelling the animation alone leaves the coroutine free to start another one.
+            if (activeMoveRoutine != null)
+            {
+                StopCoroutine(activeMoveRoutine);
+                activeMoveRoutine = null;
+            }
+
+            if (uiManager != null)
+            {
+                uiManager.CancelMoveAnimation();
+                uiManager.ClearHighlights();
+            }
+
+            // Authoritative results still queued for the screen. Without this they would be waiting
+            // for the next online game and play into it, one match late.
+            onlineResults.Clear();
+            playingOnlineMove = false;
+            pendingMove = null;
+            ClearInterruption();
+
+            isPaused = false;
+            gameState = GameState.GameOver;
         }
 
         public void SetPaused(bool paused)

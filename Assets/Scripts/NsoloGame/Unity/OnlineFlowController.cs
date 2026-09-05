@@ -200,6 +200,8 @@ namespace NsoloGame.Unity
             Transport.RoomNotFound += HandleRoomNotFound;
             Transport.ConnectionFailed += HandleConnectionFailed;
             Transport.MatchEnded += HandleMatchEnded;
+            Transport.MatchInterrupted += HandleMatchInterrupted;
+            Transport.MatchResumed += HandleMatchResumed;
             subscribed = true;
         }
 
@@ -212,6 +214,8 @@ namespace NsoloGame.Unity
             Transport.RoomNotFound -= HandleRoomNotFound;
             Transport.ConnectionFailed -= HandleConnectionFailed;
             Transport.MatchEnded -= HandleMatchEnded;
+            Transport.MatchInterrupted -= HandleMatchInterrupted;
+            Transport.MatchResumed -= HandleMatchResumed;
             subscribed = false;
         }
 
@@ -617,6 +621,34 @@ namespace NsoloGame.Unity
                 wasCreating,
                 onRetry: wasCreating ? (System.Action)CreateRoom : ShowJoinRoom,
                 onMenu: LeaveOnline);
+        }
+
+        /// <summary>
+        /// A connection dropped and the seat is being held. Nothing is torn down here — that is the
+        /// whole point of the grace period, and <see cref="HandleMatchEnded"/> still runs if it
+        /// expires.
+        ///
+        /// Only the lobby needs anything said. A match in progress is <see cref="GameController"/>'s
+        /// to caption, and it does so on the board with a countdown; the lobby has no board, so a
+        /// player waiting there for someone who dropped would be looking at an unchanged screen
+        /// with no idea anything had happened.
+        /// </summary>
+        private void HandleMatchInterrupted(MatchInterruption interruption)
+        {
+            if (!IsLobbyVisible || lobbyHintText == null) return;
+
+            lobbyHintText.text = interruption.Local
+                ? "Connection lost. Trying to reconnect..."
+                : "Your opponent lost connection. Holding their seat...";
+        }
+
+        /// <summary>Back to normal. The lobby re-reads its own state rather than guessing at it.</summary>
+        private void HandleMatchResumed()
+        {
+            if (!IsLobbyVisible) return;
+
+            EnsureMatch();
+            RefreshLobby();
         }
 
         private void HandleMatchEnded(MatchEndReason reason)

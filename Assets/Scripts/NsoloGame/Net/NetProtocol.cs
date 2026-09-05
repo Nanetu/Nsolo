@@ -24,7 +24,17 @@ namespace NsoloGame.Net
         /// they receive: two builds of the app with different protocols would otherwise misread each
         /// other's board state and desync in a way that looks like a rules bug.
         /// </summary>
-        public const int Version = 1;
+        /// <summary>
+        /// v2 adds the resume exchange (<see cref="ResumeRequestMessage"/>,
+        /// <see cref="ResumeStateMessage"/>) that a reconnecting player uses to get the board back.
+        ///
+        /// Bumped rather than added quietly, even though a v1 client would simply drop the two new
+        /// actions as unknown. "Drop and carry on" is the right behaviour for a message that does
+        /// not matter; this one carries the authoritative board, and a client that ignored it would
+        /// keep playing a game it had already fallen behind — a desync that looks like a rules bug
+        /// rather than a version mismatch. Refusing to speak is the honest failure.
+        /// </summary>
+        public const int Version = 2;
 
         public const string ActionBegin = "begin";
         public const string ActionFormation = "formation";
@@ -32,6 +42,12 @@ namespace NsoloGame.Net
         public const string ActionMove = "move";
         public const string ActionResult = "result";
         public const string ActionForfeit = "forfeit";
+
+        /// <summary>"I am back — somebody tell me where we are." Sent by a player who has rejoined.</summary>
+        public const string ActionResumeRequest = "resume?";
+
+        /// <summary>The host's answer: the whole authoritative position.</summary>
+        public const string ActionResumeState = "resume";
 
         [Serializable]
         private class ActionPeek
@@ -214,6 +230,62 @@ namespace NsoloGame.Net
             col = move.Col;
             board = (int[])resulting.Board.Clone();
             this.captured = captured;
+        }
+    }
+
+    /// <summary>
+    /// A player announcing that they are back after a dropped connection, and asking for the
+    /// position.
+    ///
+    /// Carries no board of its own, deliberately. The whole point of asking is that this device
+    /// does not know what happened while it was away — anything it sent about its own state would
+    /// be a guess, and a guess is exactly what must not reach the host.
+    /// </summary>
+    [Serializable]
+    public class ResumeRequestMessage
+    {
+        public string action = NetProtocol.ActionResumeRequest;
+        public int v = NetProtocol.Version;
+        public int player;
+
+        public ResumeRequestMessage() { }
+
+        public ResumeRequestMessage(int player)
+        {
+            this.player = player;
+        }
+    }
+
+    /// <summary>
+    /// The host putting a returning player back in the game: the current board, whose turn it is,
+    /// and whether play has actually started.
+    ///
+    /// This is a full position rather than the moves that were missed, because the host cannot know
+    /// how far behind the other device is — it may have missed one move or the entire game, and it
+    /// has no way to say which. A whole board is a few hundred bytes and is correct in every one of
+    /// those cases; a replay would need history nobody is keeping and would still have to end with
+    /// this to prove it worked.
+    ///
+    /// <see cref="started"/> distinguishes the two phases that look alike from a distance. A player
+    /// who dropped while arranging their stones comes back to a board with no agreed position yet,
+    /// and must not be shown a live game; one who dropped mid-play must not be sent back to arrange.
+    /// </summary>
+    [Serializable]
+    public class ResumeStateMessage
+    {
+        public string action = NetProtocol.ActionResumeState;
+        public int v = NetProtocol.Version;
+        public int[] board;
+        public int currentPlayer;
+        public bool started;
+
+        public ResumeStateMessage() { }
+
+        public ResumeStateMessage(int[] board, int currentPlayer, bool started)
+        {
+            this.board = board;
+            this.currentPlayer = currentPlayer;
+            this.started = started;
         }
     }
 
