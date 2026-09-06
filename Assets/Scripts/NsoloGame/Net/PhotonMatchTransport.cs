@@ -76,7 +76,7 @@ namespace NsoloGame.Net
         /// </summary>
         private const string UserIdKey = "PhotonUserId";
 
-        private enum Intent { None, Create, Join }
+        private enum Intent { None, Create, Join, Rejoin }
 
         private Intent intent = Intent.None;
         private string requestedCode;
@@ -213,6 +213,30 @@ namespace NsoloGame.Net
             }
 
             intent = Intent.Join;
+            BeginFreshAttempt();
+            ConnectThenAct();
+        }
+
+        /// <summary>
+        /// Reclaims a seat in a room this device was already in, by a code it saved rather than one
+        /// the player typed.
+        ///
+        /// Separate from <see cref="JoinRoom"/> because the request to the server is a different
+        /// one — see <c>ActOnIntent</c>. Separate from the automatic reconnect in
+        /// <see cref="TryRejoin"/> too, and for a plainer reason: that one resumes a cached
+        /// connection, and this is called when there is no connection to resume because the app was
+        /// killed and started again.
+        /// </summary>
+        public void RejoinRoom(string code)
+        {
+            requestedCode = RoomCode_Normalize(code);
+            if (!Net.RoomCode.IsWellFormed(requestedCode))
+            {
+                RoomNotFound?.Invoke();
+                return;
+            }
+
+            intent = Intent.Rejoin;
             BeginFreshAttempt();
             ConnectThenAct();
         }
@@ -358,6 +382,20 @@ namespace NsoloGame.Net
                     break;
                 case Intent.Join:
                     PhotonNetwork.JoinRoom(requestedCode);
+                    break;
+                case Intent.Rejoin:
+                    // Not JoinRoom, which is a different request to the server and the wrong one.
+                    //
+                    // The room holds two seats and PlayerTtl keeps the dropped player's actor in
+                    // one of them while it is being held — so as far as MaxPlayers is concerned the
+                    // room is still full, and an ordinary join is liable to be turned away as
+                    // GameFull by the very seat it is trying to reclaim. RejoinRoom says what is
+                    // actually being asked: not "let me in" but "I am the player in that seat".
+                    //
+                    // It also fails in the right way. Where a join would wander into a room that
+                    // happened to have space, this is refused outright once the seat has gone,
+                    // which is exactly the answer a returning player needs.
+                    PhotonNetwork.RejoinRoom(requestedCode);
                     break;
             }
         }
@@ -535,9 +573,17 @@ namespace NsoloGame.Net
 
             // A code that names nothing, a room that has closed, or one that already has two people
             // in it all mean the same thing to the player: that code did not get them into a game.
+            //
+            // The last two are what a refused RejoinRoom comes back as: JoinFailedFoundActiveJoiner
+            // when somebody is already sitting in the seat, JoinFailedWithRejoinerNotFound when the
+            // seat has gone. Both mean the game is not there to be walked back into, which is the
+            // same sentence, so they are reported the same way and the caller decides how to word
+            // it — see OnlineFlowController.AbandonRejoin.
             if (returnCode == ErrorCode.GameDoesNotExist ||
                 returnCode == ErrorCode.GameClosed ||
-                returnCode == ErrorCode.GameFull)
+                returnCode == ErrorCode.GameFull ||
+                returnCode == ErrorCode.JoinFailedFoundActiveJoiner ||
+                returnCode == ErrorCode.JoinFailedWithRejoinerNotFound)
             {
                 RoomNotFound?.Invoke();
                 return;

@@ -113,6 +113,14 @@ namespace NsoloGame.Net
         /// <summary>Whether this device is the authority that runs the real rules.</summary>
         public bool IsHost { get; private set; }
 
+        /// <summary>
+        /// Whether these two have left the lobby. True from the moment they go off to arrange their
+        /// stones, which is the point after which the room's screens must not be shown again: an
+        /// opponent rejoining makes the transport report a full room a second time, and without
+        /// this the device that stayed would be pulled out of its game and back into the lobby.
+        /// </summary>
+        public bool InProgress => begun;
+
         /// <summary>This player's display name.</summary>
         public string LocalPlayerName => transport.LocalPlayerName;
 
@@ -199,16 +207,71 @@ namespace NsoloGame.Net
         // ── Setup ─────────────────────────────────────────────────────────
 
         /// <summary>
-        /// Fixes the seat assignment. Called once, when the transport reports both players present.
+        /// Fixes the seat assignment. Called when the transport reports both players present, which
+        /// can happen more than once — the caller re-asserts it in case the first call came before
+        /// the host role was meaningful.
+        ///
+        /// Ignored once the match has left the lobby. The seat is read from the transport's idea of
+        /// who the host is, and PUN moves that role to whoever is left when somebody drops — so a
+        /// player returning to a game in progress makes this fire again on the device that stayed,
+        /// with an answer that is now wrong. It would swap that player's side of the board, throw
+        /// away the formations, and hand authority back to a device that may not have a board. The
+        /// seat is settled when the players sit down; nothing after that gets to move it.
         /// </summary>
         public void AssignSeats(bool isHost)
         {
+            if (begun)
+            {
+                Debug.Log($"NetworkMatch: seats already settled (player {LocalPlayer}, host={IsHost}); ignoring a re-assignment.");
+                return;
+            }
+
             IsHost = isHost;
             LocalPlayer = isHost ? 1 : 2;
             started = false;
             begun = false;
             formations[1] = null;
             formations[2] = null;
+        }
+
+        /// <summary>
+        /// Seats a match that is being rejoined rather than started: this device is coming back to a
+        /// game already in progress, from a saved record of which seat it was in.
+        ///
+        /// Seat and authority are set separately here, which is the whole point. Everywhere else the
+        /// two travel together because the room's creator is both player 1 and the rules-runner, but
+        /// a device that has just been relaunched holds no board — so whatever it used to be, it
+        /// cannot be the authority now. It comes back as a player and asks for the position; the
+        /// device that still has one answers, taking over as authority if it was not already
+        /// (see <see cref="HandleResumeRequest"/>).
+        ///
+        /// Marked as begun so the <see cref="AssignSeats"/> call that follows the transport
+        /// reporting a full room cannot undo any of this.
+        /// </summary>
+        public void RestoreSeat(int seat)
+        {
+            if (seat is not (1 or 2))
+            {
+                Debug.LogError($"NetworkMatch: cannot restore seat {seat}; it must be 1 or 2.");
+                return;
+            }
+
+            LocalPlayer = seat;
+            IsHost = false;
+            started = false;
+            begun = true;
+            formations[1] = null;
+            formations[2] = null;
+        }
+
+        /// <summary>
+        /// Asks whoever holds the position to send it. Used by a device that has rejoined a match it
+        /// has no memory of, where the transport's own resume path never runs because from its point
+        /// of view this is an ordinary join.
+        /// </summary>
+        public void RequestResume()
+        {
+            transport.SendToHost(NetProtocol.ToJson(new ResumeRequestMessage(LocalPlayer, hasBoard: false)));
         }
 
         /// <summary>
@@ -325,7 +388,7 @@ namespace NsoloGame.Net
                     HandleForfeit(json);
                     break;
                 case NetProtocol.ActionResumeRequest:
-                    HandleResumeRequest();
+                    HandleResumeRequest(json);
                     break;
                 case NetProtocol.ActionResumeState:
                     HandleResumeState(json);
@@ -547,7 +610,8 @@ namespace NsoloGame.Net
         private void HandleTransportResumed()
         {
             if (IsHost) BroadcastResumeState();
-            else transport.SendToHost(NetProtocol.ToJson(new ResumeRequestMessage(LocalPlayer)));
+            else transport.SendToHost(NetProtocol.ToJson(
+                new ResumeRequestMessage(LocalPlayer, hasBoard: started && Board != null)));
 
             // Raised now rather than when the state comes back, and on both devices. The host has
             // nothing to wait for — it is the authority and its board never left — and making it
@@ -556,11 +620,60 @@ namespace NsoloGame.Net
             MatchResumed?.Invoke();
         }
 
-        private void HandleResumeRequest()
+        /// <summary>
+        /// Somebody is back and wants the position.
+        ///
+        /// Normally only the authority answers, and only it should: a client replying with its own
+        /// board would be handing a returning player a position nobody validated.
+        ///
+        /// The exception is the case that made this a v3 protocol. When the request says the sender
+        /// has no board, their app was killed rather than merely disconnected — and if we are not
+        /// the authority, then they are, and the authority has come back empty-handed. Deferring to
+        /// it would leave the only surviving copy of the game sitting on this device while the
+        /// other one waited for an answer nobody could give, until the resync deadline called the
+        /// match off. So we take over.
+        ///
+        /// Our board is a validated one despite not being the authority's: every result was
+        /// replayed here against the local engine and checked against the host's board before it
+        /// was adopted (see <see cref="HandleMoveResult"/>), which is the whole reason a client's
+        /// mirror is worth promoting rather than merely worth having.
+        /// </summary>
+        private void HandleResumeRequest(string json)
         {
-            // Only the authority can answer this, and only it should: a client replying with its
-            // own board would be handing a returning player a position nobody validated.
-            if (!IsHost) return;
+            ResumeRequestMessage message = NetProtocol.FromJson<ResumeRequestMessage>(json);
+            if (message == null) return;
+
+            // SendToHost broadcasts, so our own request comes back to us.
+            if (message.player == LocalPlayer) return;
+
+            if (!IsHost)
+            {
+                bool weHaveIt = started && Board != null;
+                if (message.hasBoard || !weHaveIt)
+                {
+                    // Either they can pick up where they left off and only the authority owes them
+                    // an answer, or neither of us has a position — in which case there is nothing
+                    // to send and the match will time out, which is the honest outcome.
+                    return;
+                }
+
+                Debug.Log($"NetworkMatch: player {message.player} came back with no board, so this device " +
+                          "(player " + LocalPlayer + ") is taking over as the authority.");
+                IsHost = true;
+
+                BroadcastResumeState();
+
+                // And tell our own game, which the broadcast will not: HandleResumeState ignores a
+                // packet from ourselves, and we are now the sender. Without this the device that
+                // stayed would sit in the "catching up" state it entered when the other one
+                // dropped, waiting for a position that it is itself holding, until the resync
+                // deadline called off a match that had in fact just been repaired.
+                //
+                // The position is unchanged — nothing moved while the other player was away — so
+                // this is not adopting anything, it is saying out loud that the wait is over.
+                MatchResynced?.Invoke(Board, CurrentPlayer);
+                return;
+            }
 
             BroadcastResumeState();
         }

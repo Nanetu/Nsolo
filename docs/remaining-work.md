@@ -296,7 +296,11 @@ was empty, so Undo stayed live and invisible in two-player games. It goes throug
 
 ### Still open
 
-**Reconnect.** `PlayerTtl` and `EmptyRoomTtl` are still zero, so a player the server drops is gone
-for good and their seat with them. Holding the seat open and letting them rejoin needs the host to
-rebroadcast the board on arrival — `NetworkMatch` already has the message for it — plus a "waiting
-for your opponent" state with a grace period. Untested territory that wants two real devices.
+**Reconnect.** Built — see the "Reconnect, in three layers" bullet in `online-wiring.md` for what
+each layer covers. A dropped connection reconnects itself; an app that was killed is offered a
+rejoin on its next launch; and a returning host, which comes back holding no board, is handled by
+moving authority to whichever device still has the position.
+
+Still untested on two real devices, which is what it actually wants. The cases to walk through are:
+joiner killed and relaunched, host killed and relaunched (the one that moves authority), both
+killed, and a rejoin attempted after the five minutes have run out.

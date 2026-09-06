@@ -70,6 +70,24 @@ namespace NsoloGame.EditorTools
         /// each of these still falls back to a UIManager slot when nothing is tagged, so an
         /// untagged HUD is a working HUD — it is simply one this check cannot vouch for.
         /// </summary>
+        /// <summary>
+        /// The selection markers on the mode and difficulty cards — the tick, or whatever has been
+        /// drawn in its place.
+        ///
+        /// Checked because nothing else notices when they are missing. MenuManager shows and hides
+        /// them through NsoloUI.SetVisible, which looks the id up and quietly does nothing when
+        /// there is no object tagged with it. So an untagged highlight is not an error and not a
+        /// warning: it is a card that never lights up when you pick it, with a perfectly healthy
+        /// console. That is a hard thing to go looking for and an easy thing to report here.
+        /// </summary>
+        private static readonly ElementId[] SelectionHighlights =
+        {
+            ElementId.ModeVsComputerHighlight, ElementId.ModeVsHumanHighlight,
+            ElementId.ModeOnlineHighlight,
+            ElementId.DifficultyEasyHighlight, ElementId.DifficultyMediumHighlight,
+            ElementId.DifficultyHardHighlight,
+        };
+
         private static readonly ElementId[] HudExpected =
         {
             ElementId.HudPause, ElementId.HudAction,
@@ -212,6 +230,20 @@ namespace NsoloGame.EditorTools
                 ? "  OK       In-game HUD"
                 : $"  NOTE     In-game HUD is untagged for: {string.Join(", ", hudMissing)} " +
                   "(these fall back to the UIManager slots, so check those are filled)");
+
+            // ── Selection markers ────────────────────────────────────────
+            // Unlike the HUD, these fall back to nothing at all. A missing one is a card that never
+            // shows it has been picked, and no other part of the game says so.
+            var selectionMissing = new List<string>();
+            foreach (ElementId id in SelectionHighlights)
+                if (!byElementId.ContainsKey(id)) selectionMissing.Add(id.ToString());
+
+            report.AppendLine();
+            report.AppendLine(selectionMissing.Count == 0
+                ? "  OK       Selection markers on the mode and difficulty cards"
+                : $"  NOTE     No object is tagged for: {string.Join(", ", selectionMissing)} " +
+                  "(MenuManager shows and hides these by id, so an untagged one simply never " +
+                  "appears — tag the tick or rim object with an NsoloElement carrying that id)");
 
             if (released.Count > 0)
             {

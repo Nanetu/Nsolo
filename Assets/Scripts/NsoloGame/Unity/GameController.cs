@@ -84,6 +84,21 @@ namespace NsoloGame.Unity
         private Task<Move> hotSeatMoveTask;
         private CancellationTokenSource hotSeatMoveCancellation;
 
+        /// <summary>
+        /// Which seat opens the current two-player game. Not always player 1 — see
+        /// <see cref="NextHotSeatStarter"/>.
+        /// </summary>
+        private int hotSeatStarter = 1;
+
+        /// <summary>
+        /// Who opened the last two-player game, so the next one can open with the other seat.
+        ///
+        /// Kept in PlayerPrefs rather than a field because two players passing a phone back and
+        /// forth are one session in every sense except the app's: they put it down between games,
+        /// and an in-memory flag would reset and hand player 1 the opening move again.
+        /// </summary>
+        private const string HotSeatLastStarterKey = "HotSeatLastStarter";
+
         /// <summary>Which player is laying out their stones during the shared formation phase.</summary>
         private int arrangingPlayer = 1;
 
@@ -155,6 +170,20 @@ namespace NsoloGame.Unity
         private const string ActionLabelForfeit = "FORFEIT";
 
         public event System.Action<int, int, int> GameOver;
+
+        /// <summary>
+        /// An online match this controller gave up on, rather than one the transport reported as
+        /// over.
+        ///
+        /// There is exactly one of those: a reconnect that got as far as the room and then never
+        /// received a position (see <see cref="CheckResyncDeadline"/>). The transport is perfectly
+        /// happy in that case — we are connected, in a room, and nothing has failed as far as it can
+        /// tell — so its MatchEnded never fires, and without this the closing dialog that normally
+        /// follows the end of an online game would never be raised. The player would be left on a
+        /// dead board with a pause button that had nothing to say.
+        /// </summary>
+        public event System.Action<Net.MatchEndReason> OnlineMatchAbandoned;
+
         public GameState CurrentState => gameState;
         public int CurrentDifficulty => (int)aiDifficulty;
         public GameMode CurrentMode => mode;
@@ -282,10 +311,15 @@ namespace NsoloGame.Unity
             bool hotSeat = mode == GameMode.VersusHuman;
             bool online = mode == GameMode.Online;
 
-            // Hot-seat always opens with player 1, whose seat is also the camera's home position.
-            // The AI game keeps its "loser of the last game starts" rule. Online has neither: the
-            // host draws for it and says so in the start packet, so there is nothing to guess here.
-            gameBoard.CurrentPlayer = hotSeat || online ? 1 : GetStartingPlayerForDifficulty(aiDifficulty);
+            // Hot-seat alternates the opening move between the two seats — see
+            // NextHotSeatStarter for why that is worth doing rather than always opening with
+            // player 1. The AI game keeps its "loser of the last game starts" rule. Online has
+            // neither: the host draws for it and says so in the start packet, so there is nothing
+            // to guess here.
+            hotSeatStarter = hotSeat ? NextHotSeatStarter() : 1;
+            gameBoard.CurrentPlayer = online ? 1
+                                    : hotSeat ? hotSeatStarter
+                                    : GetStartingPlayerForDifficulty(aiDifficulty);
             hotSeatCurrentPlayer = gameBoard.CurrentPlayer;
 
             // Online, each device arranges its own side and only its own side.
@@ -556,6 +590,38 @@ namespace NsoloGame.Unity
             return PlayerPrefs.GetInt($"LastLoser_Diff{(int)difficulty}", defaultStarter);
         }
 
+        /// <summary>
+        /// Hands the opening move to whichever seat did not have it last time, and records the
+        /// choice for the game after that.
+        ///
+        /// Moving first is worth a great deal in Nsolo, and more than it looks. From the standard
+        /// two-per-pit board every one of the sixteen legal opening moves captures — there is no
+        /// quiet first move to play — and it takes between four and twelve stones off the other
+        /// side before they have touched the board. Self-play puts the opener's win rate at 57%
+        /// between two players choosing at random and above 80% once both are choosing well.
+        ///
+        /// So a fixed opener is not a small unfairness in a two-player game, it is most of the
+        /// result. The other two modes had already dealt with this in their own way — the AI hands
+        /// the opening to whoever lost last, and an online host draws for it — and hot-seat was
+        /// the one left always opening with player 1, which is to say always with whoever happened
+        /// to be holding the phone when the game was set up.
+        ///
+        /// Alternating rather than drawing lots, because these two are sitting together across a
+        /// series: taking turns is both fairer over a session and visibly fair, which a coin they
+        /// cannot see is not.
+        /// </summary>
+        private int NextHotSeatStarter()
+        {
+            // Defaults to 2 so that the first game ever played opens, after the flip, with player 1.
+            int last = PlayerPrefs.GetInt(HotSeatLastStarterKey, 2);
+            int starter = last == 1 ? 2 : 1;
+
+            PlayerPrefs.SetInt(HotSeatLastStarterKey, starter);
+            PlayerPrefs.Save();
+
+            return starter;
+        }
+
         private void Update()
         {
             if (gameState == GameState.AiThinking)
@@ -807,6 +873,16 @@ namespace NsoloGame.Unity
             // music start here, exactly as they do when the single-player formation is committed.
             uiManager.StartTurnTimer();
             AudioManager.StartGameMusic();
+
+            // Player 2 has just finished arranging, so when the opening move is theirs the phone
+            // and the camera are already pointing the right way. Handing over would show a
+            // pass-the-device card to somebody already holding it and flip the board off their
+            // side and straight back.
+            if (hotSeatStarter == 2)
+            {
+                BeginHotSeatTurn(2);
+                return;
+            }
 
             StartCoroutine(HandOverToPlayer(1, resumeFormation: false));
         }
@@ -1099,6 +1175,103 @@ namespace NsoloGame.Unity
             networkMatch.MatchResynced += HandleMatchResynced;
 
             InitializeGame();
+        }
+
+        /// <summary>
+        /// Walks back into an online game that is already under way, on a device that has no memory
+        /// of it — the app was killed and relaunched inside the five minutes its seat is held.
+        ///
+        /// Not <see cref="StartNewOnlineGame"/> with a flag, because almost everything that method
+        /// does is wrong here. It deals a fresh board, opens the arrangement phase and waits for two
+        /// formations; this game's stones were arranged some minutes ago and its position exists on
+        /// the other device. So the setup that is still relevant — mode, systems, subscriptions, the
+        /// camera on the right side of the board — is done here, and the board itself is left blank
+        /// until the position arrives.
+        ///
+        /// What comes next is the path a reconnecting client already takes: nothing is drawn, the
+        /// caption says we are catching up, and <see cref="resyncDeadline"/> is armed so a position
+        /// that never comes ends the match instead of leaving a player on a board that says
+        /// "catching up" forever. <see cref="HandleMatchResynced"/> takes it from there.
+        /// </summary>
+        public void ResumeOnlineGame(NetworkMatch match)
+        {
+            Log($"ResumeOnlineGame(localPlayer={match?.LocalPlayer})");
+
+            if (match == null)
+            {
+                Debug.LogError("GameController: ResumeOnlineGame called with no match.");
+                return;
+            }
+
+            DetachOnlineMatch();
+
+            mode = GameMode.Online;
+            InitializeSystems();
+
+            networkMatch = match;
+            onlineLocalPlayer = match.LocalPlayer;
+
+            networkMatch.MatchStarted += HandleMatchStarted;
+            networkMatch.MoveApplied += HandleMoveApplied;
+            networkMatch.Forfeited += HandleForfeited;
+            networkMatch.MatchEnded += HandleMatchEnded;
+            networkMatch.Desynced += HandleDesynced;
+            networkMatch.MatchInterrupted += HandleMatchInterrupted;
+            networkMatch.MatchResumed += HandleMatchResumed;
+            networkMatch.MatchResynced += HandleMatchResynced;
+
+            // The same clearing InitializeGame does, minus everything that deals a new game.
+            CancelAiThinking();
+            CancelHintSearch();
+            CancelHotSeatTurn();
+            StopAllCoroutines();
+            PassDeviceModal.Instance?.ForceHide();
+            boardHistory.Clear();
+            isPaused = false;
+            onlineResults.Clear();
+            playingOnlineMove = false;
+            formationHeld = 0;
+            gameStartTime = Time.time;
+
+            System.Array.Clear(capturesThisGame, 0, capturesThisGame.Length);
+            System.Array.Clear(longestRelayThisGame, 0, longestRelayThisGame.Length);
+
+            // Deliberately an empty board rather than the two-per-pit default. A returning player is
+            // about to be handed the real position, and showing them a plausible-looking opening
+            // for the round trip in between would be showing them a game that is not theirs — the
+            // one thing worse than showing them nothing.
+            gameBoard = new GameBoard();
+            for (int r = 0; r < GameBoard.Rows; r++)
+                for (int c = 0; c < GameBoard.Cols; c++)
+                    gameBoard.Set(r, c, 0);
+
+            arrangingPlayer = onlineLocalPlayer;
+
+            if (uiManager == null)
+            {
+                Debug.LogError("GameController: UIManager not assigned.");
+                return;
+            }
+
+            ResolveBoardFlipper();
+            boardFlipper?.ResetToBase();
+            StartCoroutine(OrientBoardForLocalSeat());
+
+            uiManager.SetScoreSides(Opponent(onlineLocalPlayer), onlineLocalPlayer);
+            uiManager.SetSeatNames(mode, networkMatch.OpponentName);
+
+            gameState = GameState.OnlineWaiting;
+            uiManager.UpdateDisplay(gameBoard);
+            uiManager.ResetGameTimer();
+            uiManager.SetUndoInteractable(false);
+            uiManager.ClearHighlights();
+            RefreshActionButton();
+
+            uiManager.ShowStatus("Rejoining");
+            uiManager.ShowLastMove("Catching up with the game...");
+            resyncDeadline = Time.realtimeSinceStartup + ResyncTimeoutSeconds;
+
+            AudioManager.StartGameMusic();
         }
 
         /// <summary>
@@ -1480,6 +1653,10 @@ namespace NsoloGame.Unity
             resyncDeadline = 0f;
             Debug.LogWarning($"GameController: no position from the host within {ResyncTimeoutSeconds:0}s of reconnecting.");
             EndOnlineMatch(MatchEndReason.OpponentLeft);
+
+            // Announced as well as applied. Nothing else knows this happened — the transport has
+            // seen no failure — so this is the only chance to put the closing dialog up.
+            OnlineMatchAbandoned?.Invoke(MatchEndReason.OpponentLeft);
         }
 
         /// <summary>
@@ -1924,6 +2101,12 @@ namespace NsoloGame.Unity
                 PlayerPrefs.SetInt($"LastLoser_Diff{(int)aiDifficulty}", loser);
                 PlayerPrefs.Save();
             }
+
+            // A finished game is not one to offer a rejoin into. The record would expire on its own
+            // a few minutes from now, but "a few minutes" is exactly the window in which somebody
+            // closes the app after a win and opens it again — and being asked whether you want to
+            // rejoin the game you just won reads as the app having lost track of it.
+            if (online) Net.SavedMatch.Forget();
 
             // Started before the panel goes up so the turn is already under way behind it. Online is
             // left alone: the joiner's camera is parked on their own seat, which is where it should

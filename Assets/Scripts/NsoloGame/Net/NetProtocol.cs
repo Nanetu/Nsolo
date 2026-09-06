@@ -23,9 +23,8 @@ namespace NsoloGame.Net
         /// Bumped whenever the shape of a message changes. Both sides check it on the first packet
         /// they receive: two builds of the app with different protocols would otherwise misread each
         /// other's board state and desync in a way that looks like a rules bug.
-        /// </summary>
-        /// <summary>
-        /// v2 adds the resume exchange (<see cref="ResumeRequestMessage"/>,
+        ///
+        /// v2 added the resume exchange (<see cref="ResumeRequestMessage"/>,
         /// <see cref="ResumeStateMessage"/>) that a reconnecting player uses to get the board back.
         ///
         /// Bumped rather than added quietly, even though a v1 client would simply drop the two new
@@ -33,8 +32,23 @@ namespace NsoloGame.Net
         /// not matter; this one carries the authoritative board, and a client that ignored it would
         /// keep playing a game it had already fallen behind — a desync that looks like a rules bug
         /// rather than a version mismatch. Refusing to speak is the honest failure.
+        ///
+        /// v3 adds <see cref="ResumeRequestMessage.hasBoard"/>, which is what lets a player come
+        /// back after their app was killed rather than merely disconnected.
+        ///
+        /// The two are not the same problem. A player whose connection dropped still has the whole
+        /// game in memory and only needs the moves they missed; a player whose app was killed has
+        /// nothing, and if they were the host, nothing is exactly what the authority now holds. v2
+        /// let only the host answer a resume request, so a returning host asked a question that the
+        /// one device still holding the position was forbidden to answer. The flag says which of
+        /// the two kinds of return this is, and the answer follows from it: whoever still has the
+        /// board sends it, promoting itself to authority if that is what it takes.
+        ///
+        /// A v2 build would parse a v3 request as one from a player who has a board — false is the
+        /// default for a missing bool — and refuse to answer it, which is the old behaviour and the
+        /// wrong one. Hence the bump rather than a silent field.
         /// </summary>
-        public const int Version = 2;
+        public const int Version = 3;
 
         public const string ActionBegin = "begin";
         public const string ActionFormation = "formation";
@@ -239,7 +253,14 @@ namespace NsoloGame.Net
     ///
     /// Carries no board of its own, deliberately. The whole point of asking is that this device
     /// does not know what happened while it was away — anything it sent about its own state would
-    /// be a guess, and a guess is exactly what must not reach the host.
+    /// be a guess, and a guess is exactly what must not reach the authority.
+    ///
+    /// <see cref="hasBoard"/> is not a board, though: it is the one bit about our own state that is
+    /// not a guess, and the receiver needs it to know which kind of return this is. A player who
+    /// merely reconnected still has the position and is only asking to be brought up to date; one
+    /// whose app was killed and restarted has nothing at all. When the second of those was the
+    /// host, the other device is the only one left that knows where the game got to, and this flag
+    /// is what tells it to answer rather than defer to an authority that cannot.
     /// </summary>
     [Serializable]
     public class ResumeRequestMessage
@@ -248,11 +269,15 @@ namespace NsoloGame.Net
         public int v = NetProtocol.Version;
         public int player;
 
+        /// <summary>Whether the sender still holds a position, or is coming back from nothing.</summary>
+        public bool hasBoard;
+
         public ResumeRequestMessage() { }
 
-        public ResumeRequestMessage(int player)
+        public ResumeRequestMessage(int player, bool hasBoard)
         {
             this.player = player;
+            this.hasBoard = hasBoard;
         }
     }
 

@@ -81,6 +81,21 @@ namespace NsoloGame.Unity
         /// </summary>
         private bool lastAttemptWasCreate;
 
+        /// <summary>
+        /// Set between accepting a rejoin offer and landing back in the game, so the callbacks that
+        /// a join normally produces are read as a return rather than as an arrival.
+        ///
+        /// Every one of them means something different here. A full room is not a lobby to show but
+        /// a game to walk back into; a room that cannot be found is not a mistyped code but a game
+        /// that has ended, since nobody typed anything. Without this the returning player would be
+        /// dropped into the lobby of their own match, or offered the chance to try a code they have
+        /// never seen.
+        /// </summary>
+        private bool rejoining;
+
+        /// <summary>The seat the saved match says we were in, held while the rejoin is in flight.</summary>
+        private int rejoinSeat;
+
         private void Awake()
         {
             if (transport == null) transport = GetComponent<PhotonMatchTransport>();
@@ -96,6 +111,179 @@ namespace NsoloGame.Unity
             // After NsoloUI has built its register, which happens once every Awake has run.
             ResolveScreens();
             HideScreens();
+
+            if (gameController != null) gameController.OnlineMatchAbandoned += HandleMatchAbandoned;
+
+            StartCoroutine(OfferSavedMatchWhenSettled());
+        }
+
+        /// <summary>
+        /// Waits a frame before offering a saved match, so the offer is not put up into a scene that
+        /// is still starting.
+        /// </summary>
+        /// <remarks>
+        /// Start runs in no defined order between components, and two of the others clear every
+        /// modal on their way up: GameController does it when it deals a board, and this class does
+        /// it when the online screen opens. A card raised from inside Start would therefore survive
+        /// or vanish depending on which component Unity happened to initialise first, which is the
+        /// kind of bug that works on one machine and not the next.
+        ///
+        /// One frame is enough because the thing being waited for is every other Start, not a
+        /// network round trip or an animation.
+        /// </remarks>
+        private System.Collections.IEnumerator OfferSavedMatchWhenSettled()
+        {
+            yield return null;
+            OfferSavedMatch();
+        }
+
+        // ── Coming back to a match the app was killed out of ──────────────
+
+        /// <summary>
+        /// Asks, on launch, whether the player wants to walk back into a game that is still holding
+        /// their seat.
+        ///
+        /// This is the only case that needs asking. A connection that drops while the app is alive
+        /// is put right by the transport without a word — PUN reconnects and takes the seat straight
+        /// back — and interrupting that with a modal would be asking permission for something that
+        /// has already happened. What cannot be put right silently is the process being killed:
+        /// there is nothing left to reconnect, and the app has no way to know whether the player
+        /// wants to be back in that game or has moved on. So it asks, once, and only while the seat
+        /// is genuinely still there.
+        ///
+        /// Asked rather than done automatically because relaunching the app is not the same gesture
+        /// as wanting to resume. Somebody may have left that game on purpose by force-quitting, and
+        /// dropping them straight back onto the board they walked away from would be the app
+        /// overruling them.
+        /// </summary>
+        private void OfferSavedMatch()
+        {
+            SavedMatch.Record? saved = SavedMatch.Load();
+            if (saved == null) return;
+
+            if (GameModals.Instance == null)
+            {
+                // Nothing to ask with. Forgetting is the safe failure: the alternative is a record
+                // that survives to ambush a later launch.
+                Debug.LogWarning("OnlineFlowController: no GameModals, so a saved match cannot be offered.");
+                SavedMatch.Forget();
+                return;
+            }
+
+            SavedMatch.Record record = saved.Value;
+
+            GameModals.Instance.ShowRejoinOffer(
+                Mathf.CeilToInt(record.SecondsLeft),
+                onRejoin: () => RejoinSavedMatch(record),
+                onDismiss: SavedMatch.Forget);
+        }
+
+        /// <summary>
+        /// Takes up the offer. Goes straight at the room by its remembered code, with none of the
+        /// screens a normal join passes through: the player has already said what they want and the
+        /// only thing between them and their board is a connection.
+        /// </summary>
+        private void RejoinSavedMatch(SavedMatch.Record record)
+        {
+            if (transport == null)
+            {
+                Debug.LogError("OnlineFlowController: no PhotonMatchTransport, so a saved match cannot be rejoined.");
+                SavedMatch.Forget();
+                return;
+            }
+
+            rejoining = true;
+            rejoinSeat = record.Seat;
+            lastAttemptWasCreate = false;
+
+            SetConnecting(true);
+            HoldScreenAwake(true);
+            menuManager?.HideAllPanelsForOnline();
+            GameModals.Instance?.ShowRejoining();
+
+            Transport.RejoinRoom(record.Code);
+        }
+
+        /// <summary>
+        /// We are back in the room. Rebuilds the match around the seat we used to hold and hands it
+        /// to the game, then asks for the position.
+        ///
+        /// The order matters and is not obvious: the controller is attached first and the request
+        /// goes out second. The answer can arrive in the very next packet, and a position that
+        /// landed before anything was listening for it would be dropped — leaving the player on a
+        /// blank board until the resync deadline gave up on a message that had already come and
+        /// gone.
+        /// </summary>
+        private void ResumeSavedMatch()
+        {
+            rejoining = false;
+            SetConnecting(false);
+            GameModals.Instance?.HideAll();
+
+            // Any match object from before is not this one. Built fresh rather than re-seated
+            // because a rejoin arrives with nothing to reuse.
+            CloseMatchObject();
+
+            match = new NetworkMatch(Transport, new GameEngine(new SowingPath()));
+            match.MatchBegun += HandleMatchBegun;
+            match.MatchStarted += HandleMatchStarted;
+            match.BoardStateChanged += HandleBoardStateChanged;
+
+            // The seat comes from the saved record, not from the transport. PUN hands the master
+            // client role to whoever is left when somebody drops and never hands it back, so a
+            // returning host asking the transport who it is would be told it is the joiner and
+            // would sit down on the wrong side of the board.
+            match.RestoreSeat(rejoinSeat);
+
+            HideScreens();
+            menuManager?.ResumeOnlineGame(match);
+
+            match.RequestResume();
+        }
+
+        /// <summary>
+        /// The rejoin did not get us into a game. Says so plainly and forgets the match rather than
+        /// offering a retry: the room is gone, and the same code will fail the same way.
+        /// </summary>
+        private void AbandonRejoin()
+        {
+            rejoining = false;
+            SetConnecting(false);
+            SavedMatch.Forget();
+            CloseMatch();
+            HoldScreenAwake(false);
+
+            if (GameModals.Instance == null)
+            {
+                menuManager?.ShowWelcome();
+                return;
+            }
+
+            GameModals.Instance.ShowRejoinFailed(onDismiss: () =>
+            {
+                HideScreens();
+                menuManager?.ShowWelcome();
+            });
+        }
+
+        /// <summary>
+        /// The game controller gave up on a match the transport still thinks is fine — a reconnect
+        /// that reached the room and was never sent a position. Handled exactly as a match the
+        /// transport ended, minus telling the controller, which is where this came from.
+        /// </summary>
+        private void HandleMatchAbandoned(MatchEndReason reason)
+        {
+            SavedMatch.Forget();
+            CloseMatch();
+
+            if (GameModals.Instance == null)
+            {
+                menuManager?.ShowWelcome();
+                return;
+            }
+
+            endedReason = reason;
+            ShowMatchEndedDialog();
         }
 
         /// <summary>
@@ -140,7 +328,11 @@ namespace NsoloGame.Unity
             SetLobbyVisible(false);
         }
 
-        private void OnDestroy() => Unsubscribe();
+        private void OnDestroy()
+        {
+            Unsubscribe();
+            if (gameController != null) gameController.OnlineMatchAbandoned -= HandleMatchAbandoned;
+        }
 
         private void Update()
         {
@@ -236,6 +428,7 @@ namespace NsoloGame.Unity
             // that the last match's ending cannot follow them into the next one.
             SetConnecting(false);
             endedReason = null;
+            rejoining = false;
 
             HoldScreenAwake(true);
 
@@ -480,8 +673,25 @@ namespace NsoloGame.Unity
 
         private void HandleMatchReady()
         {
-            SetConnecting(false);
             GameModals.Instance?.CloseJoinRoom();
+
+            // We asked for this room by a code we saved, not by one somebody typed. There is a game
+            // in it already.
+            if (rejoining)
+            {
+                ResumeSavedMatch();
+                return;
+            }
+
+            SetConnecting(false);
+
+            // The room filling up again, on the device that never left. This is the opponent
+            // walking back in after their app was killed — the transport reports it as an ordinary
+            // full room because from where it sits that is what it is. Showing the lobby here would
+            // take a player out of a game they are in the middle of, to look at a waiting screen for
+            // a match that is already under way.
+            if (match != null && match.InProgress) return;
+
             EnsureMatch();
             ShowLobby();
         }
@@ -506,6 +716,54 @@ namespace NsoloGame.Unity
             match = new NetworkMatch(Transport, new GameEngine(new SowingPath()));
             match.AssignSeats(Transport.IsHost);
             match.MatchBegun += HandleMatchBegun;
+            match.MatchStarted += HandleMatchStarted;
+            match.BoardStateChanged += HandleBoardStateChanged;
+        }
+
+        /// <summary>
+        /// Play has started, so from here there is a game worth coming back to. Writes down the
+        /// room and the seat against the same five minutes the transport holds a dropped seat for,
+        /// so the two offers cannot disagree about whether there is still a match.
+        /// </summary>
+        private void HandleMatchStarted(GameBoard board, int firstPlayer)
+        {
+            // Past the throttle. This is the write that has to land — the throttle is measured
+            // across the component's whole life, not one match's, so a rematch begun within half a
+            // minute of the last one ending would otherwise be silently skipped and never saved.
+            RememberMatch(force: true);
+        }
+
+        /// <summary>
+        /// Pushes the saved record's deadline back out as the game is played.
+        ///
+        /// The window is five minutes because that is how long a seat is held, and it is counted
+        /// from the drop — so a record written once, at the first move, goes stale five minutes
+        /// into a game that may well still be going. A player killed at move twenty would be told
+        /// there was nothing to come back to while their opponent sat watching a countdown.
+        ///
+        /// Every authoritative state change is a fresh five minutes, which is the same promise the
+        /// transport makes: as long as the game is moving, there is a game to come back to.
+        /// </summary>
+        private void HandleBoardStateChanged(GameBoard board) => RememberMatch();
+
+        /// <summary>
+        /// Throttled because it writes to disk. PlayerPrefs.Save is cheap but not free, and once a
+        /// move would mean a flush every few seconds for the length of a match to move a deadline
+        /// that is five minutes wide.
+        /// </summary>
+        private float lastRemembered = float.NegativeInfinity;
+        private const float RememberIntervalSeconds = 30f;
+
+        private void RememberMatch(bool force = false)
+        {
+            if (match == null || Transport == null) return;
+            if (!force && Time.unscaledTime - lastRemembered < RememberIntervalSeconds) return;
+
+            string code = Transport.RoomCode;
+            if (string.IsNullOrEmpty(code)) return;
+
+            lastRemembered = Time.unscaledTime;
+            SavedMatch.Remember(code, match.LocalPlayer, PhotonMatchTransport.RejoinGraceSeconds);
         }
 
         private void ShowLobby()
@@ -592,6 +850,14 @@ namespace NsoloGame.Unity
         {
             SetConnecting(false);
 
+            // Nobody typed this code, so "check it and try again" is the wrong thing to say and
+            // the wrong thing to offer. The seat ran out, or the opponent gave up and left.
+            if (rejoining)
+            {
+                AbandonRejoin();
+                return;
+            }
+
             if (GameModals.Instance == null)
             {
                 LeaveOnline();
@@ -605,6 +871,15 @@ namespace NsoloGame.Unity
         {
             bool wasCreating = lastAttemptWasCreate;
             SetConnecting(false);
+
+            // A rejoin that could not reach the service at all. Reported the same way as a room
+            // that has gone: from the player's seat the game is unreachable either way, and the
+            // seat will have run out by the time any retry could help.
+            if (rejoining)
+            {
+                AbandonRejoin();
+                return;
+            }
 
             // Not "room not found". That wording, and its retry landing in the join screen, told a
             // player who had just pressed CREATE ROOM that their room could not be found and then
@@ -700,11 +975,12 @@ namespace NsoloGame.Unity
                 // Nothing to do: dismissing is the whole action. The board is still drawn underneath
                 // and nothing can move it now, so this leaves them alone with it.
                 onStay: null,
-                onMenu: () => { endedReason = null; HideScreens(); menuManager?.ShowWelcome(); },
-                // Whatever difficulty they last chose, so this is one tap rather than a trip through
-                // a difficulty screen they did not ask for.
-                onPlayComputer: () => { endedReason = null; HideScreens(); menuManager?.StartGame(PlayerPrefs.GetInt("AIDifficulty", 1)); },
-                onPlayHuman: () => { endedReason = null; HideScreens(); menuManager?.StartHotSeatGame(); });
+                // The mode screen rather than the main menu. It is the one screen that asks the
+                // question this button is really asking — which kind of game next — and it offers
+                // all three answers, including going online again, which the buttons this replaced
+                // could not. The way back to the menu is on it, so nothing is further away than it
+                // was.
+                onNewGame: () => { endedReason = null; HideScreens(); menuManager?.ShowMode(); });
         }
 
         /// <summary>
@@ -729,16 +1005,38 @@ namespace NsoloGame.Unity
         /// </summary>
         private void CloseMatch()
         {
-            gameController?.DetachOnlineMatch();
+            // Whether there was a game to close, read before CloseMatchObject clears it.
+            //
+            // The saved record only goes when there was. Every deliberate way out of an online game
+            // passes through here, which is what keeps a rejoin from being offered for a match the
+            // player chose to leave — but so does the menu on its way up at launch, through
+            // MenuManager.PrepareMenuReturn, and at that moment there has never been a match. An
+            // unconditional forget there would wipe the record a frame before it could be offered,
+            // which is to say the feature would never once have worked.
+            bool hadMatch = match != null;
 
-            if (match != null)
-            {
-                match.MatchBegun -= HandleMatchBegun;
-                match.Detach();
-                match = null;
-            }
+            gameController?.DetachOnlineMatch();
+            CloseMatchObject();
+
+            if (hadMatch) SavedMatch.Forget();
 
             Transport?.Leave();
+        }
+
+        /// <summary>
+        /// Drops the match object alone, leaving the room and the transport untouched. Split out of
+        /// <see cref="CloseMatch"/> for the rejoin, which replaces the match while staying in the
+        /// very room the old one was pointing at.
+        /// </summary>
+        private void CloseMatchObject()
+        {
+            if (match == null) return;
+
+            match.MatchBegun -= HandleMatchBegun;
+            match.MatchStarted -= HandleMatchStarted;
+            match.BoardStateChanged -= HandleBoardStateChanged;
+            match.Detach();
+            match = null;
         }
 
         private static void SetActive(GameObject obj, bool active)

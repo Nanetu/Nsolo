@@ -26,6 +26,12 @@ namespace NsoloGame.Unity
             [InspectorName("Pill (long and thin)")] Pill = 1,
             [InspectorName("Card (square-ish)")] Card = 2,
             [InspectorName("None (no glow, just the squash)")] None = 3,
+
+            // For anything Auto cannot describe: circles, arrows, icons, a knob on a dial. Auto
+            // only ever answers "pill" or "card", so every other outline was being approximated by
+            // whichever of those two was less wrong — which on a round button is a lit square with
+            // the button inside it.
+            [InspectorName("Match (glow in the shape of this object's own picture)")] Match = 4,
         }
 
         [Tooltip("What this object is. Everything else on this component is optional.")]
@@ -145,6 +151,8 @@ namespace NsoloGame.Unity
             // A graphic that is not a raycast target is invisible to touch however opaque it looks.
             graphic.raycastTarget = true;
 
+            FreeDecorationsFromTouch();
+
             var button = GetComponent<Button>();
             if (button != null) return;
 
@@ -159,11 +167,50 @@ namespace NsoloGame.Unity
             button.transition = Selectable.Transition.None;
         }
 
+        /// <summary>
+        /// Stops a picture laid on top of this button from eating the taps meant for it.
+        ///
+        /// Anything drawn over a button — a knob on a dial, a badge, an icon sitting on a plate —
+        /// is added as a child Image, and a fresh Image is a raycast target by default. Unity hands
+        /// the touch to the topmost target it hits, so the decoration takes it. Being a child, the
+        /// event then walks up and reaches the Button anyway, which is why this usually goes
+        /// unnoticed — until the decoration is the thing under the finger and the artwork is
+        /// larger, or offset, or sits in a mask, and the walk up never happens. What the player
+        /// sees is a button that answered before the knob was added and stopped afterwards, with
+        /// nothing about the knob suggesting it was responsible.
+        ///
+        /// Only genuinely decorative children are touched. A child with its own Selectable or its
+        /// own event handler is something somebody meant to be clickable in its own right, and
+        /// switching that off would break a nested control to fix a picture.
+        /// </summary>
+        private void FreeDecorationsFromTouch()
+        {
+            foreach (Graphic child in GetComponentsInChildren<Graphic>(true))
+            {
+                if (child == null || child.gameObject == gameObject) continue;
+                if (!child.raycastTarget) continue;
+
+                if (child.GetComponent<Selectable>() != null) continue;
+                if (child.GetComponent<UnityEngine.EventSystems.IEventSystemHandler>() != null) continue;
+
+                child.raycastTarget = false;
+            }
+        }
+
         private void AttachPressFeedback()
         {
             if (pressShape == Shape.None)
             {
                 UIPressFeedback.Attach(gameObject, null);
+                return;
+            }
+
+            if (pressShape == Shape.Match)
+            {
+                // No sprite to hand over: the glow reads the object's own Image for itself, which
+                // also means re-exporting the picture changes the glow with it.
+                UIPressFeedback attached = UIPressFeedback.Attach(gameObject, null);
+                attached?.MatchArtwork();
                 return;
             }
 

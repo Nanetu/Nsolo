@@ -135,6 +135,19 @@ namespace NsoloGame.Net
         void JoinRoom(string code);
 
         /// <summary>
+        /// Reclaims a seat in a room this device was in before, by a code it saved rather than one
+        /// the player typed.
+        ///
+        /// Distinct from <see cref="JoinRoom"/> and not a convenience wrapper on it. A held seat
+        /// still counts against the room's two places, so asking to join one is asking to be a
+        /// third player and is liable to be refused; this asks to be the player already in it.
+        /// Implementations should also fail rather than fall back to an ordinary join — a returning
+        /// player who ends up in the wrong seat, or in a room that merely had space, is worse off
+        /// than one who is told the game has ended.
+        /// </summary>
+        void RejoinRoom(string code);
+
+        /// <summary>
         /// Sends an authoritative message to everyone, the sender included. The host's own screen
         /// reacts to its broadcasts by receiving them back, so both sides run the same code path
         /// from the same packet rather than the host having a shortcut the client does not.

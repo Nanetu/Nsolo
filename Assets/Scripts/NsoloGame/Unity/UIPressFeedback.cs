@@ -31,6 +31,15 @@ namespace NsoloGame.Unity
                  "UI_RoundRectFill for cards. Left empty, the button still scales but does not glow.")]
         [SerializeField] private Sprite shape;
 
+        [Tooltip("Light the button up in the shape of its own artwork instead of a rounded " +
+                 "rectangle. Turn this on for anything that is not a pill or a card — circles, " +
+                 "arrows, icons — and the glow takes whatever silhouette the sprite has.")]
+        [SerializeField] private bool matchOwnArtwork;
+
+        [Tooltip("What colour the button lights up. White reads as the artwork brightening, " +
+                 "whatever colour the artwork is. Set it to a colour to tint the press instead.")]
+        [SerializeField] private Color glowColor = Color.white;
+
         [Tooltip("How bright the layer gets under a finger. Small on purpose: this reads as the " +
                  "painted pill lighting up, not as a white box appearing on top of it.")]
         [SerializeField, Range(0f, 1f)] private float pressAlpha = 0.14f;
@@ -59,6 +68,12 @@ namespace NsoloGame.Unity
         [Tooltip("Nudges the glow off centre, in screen pixels. Same rules as the padding.")]
         [SerializeField] private Vector2 glowOffset = Vector2.zero;
 
+        [Tooltip("Scales the glow about its centre. Use this rather than the padding when the " +
+                 "artwork has transparent margin baked into the export - a shape that only fills " +
+                 "80% of its own PNG needs the glow grown by a proportion, not by a fixed number " +
+                 "of pixels that would be wrong on the next button.")]
+        [SerializeField, Range(0.25f, 2f)] private float glowScale = 1f;
+
         private RectTransform rect;
         private Vector3 homeScale = Vector3.one;
         private Button button;
@@ -72,6 +87,12 @@ namespace NsoloGame.Unity
         /// said something more specific than any rule this component could apply.
         /// </summary>
         private bool layerIsAuthored;
+
+        /// <summary>
+        /// What an authored layer was already drawn with when the scene loaded, or null. Held so a
+        /// re-fit or a later <see cref="SetShape"/> cannot quietly replace a choice made by hand.
+        /// </summary>
+        private Sprite authoredSprite;
 
         private bool Available => button == null || button.interactable;
 
@@ -103,11 +124,12 @@ namespace NsoloGame.Unity
             layer = layerRect.GetComponent<Image>();
             if (layer == null) layer = layerRect.gameObject.AddComponent<Image>();
 
-            // The sprite is still ours even on an authored layer: it is chosen from the button's
-            // proportions and would otherwise have to be kept in step by hand on every copy.
-            layer.sprite = shape;
-            layer.type = Image.Type.Sliced;
-            layer.color = new Color(1f, 1f, 1f, 0f);
+            // Read before ApplyShape can touch it. A sprite sitting on an authored layer is the
+            // most specific thing anybody can say about how this button should light up, and it is
+            // the one thing the old code went out of its way to throw away.
+            authoredSprite = layerIsAuthored ? layer.sprite : null;
+
+            ApplyShape();
 
             // Never let the decoration eat the tap it is decorating.
             layer.raycastTarget = false;
@@ -120,6 +142,73 @@ namespace NsoloGame.Unity
 
         /// <summary>Child object name the component looks for, and gives the one it builds.</summary>
         public const string LayerName = "PressLayer";
+
+        /// <summary>
+        /// Points the layer at whatever it should be drawn as, and picks the fill mode to match.
+        ///
+        /// Two kinds of shape end up here and they cannot be drawn the same way. The generated
+        /// rounded rectangles from <see cref="UIShapes"/> carry a 9-slice border, which is the whole
+        /// reason they survive being stretched across a button of any size. A sprite taken from the
+        /// button's own artwork — a circle, a back arrow, an exit cross — carries no border at all,
+        /// and asking Unity to 9-slice it draws nothing while complaining about it in the console.
+        /// So the fill mode follows the sprite rather than being assumed.
+        ///
+        /// Matching the artwork is what lets a shape be authored in Figma and dropped in. The glow
+        /// is then the silhouette of the picture instead of a rounded box approximating it, which
+        /// is the difference between a circular button lighting up and a circular button sitting
+        /// inside a lit square.
+        /// </summary>
+        private void ApplyShape()
+        {
+            if (layer == null) return;
+
+            // Somebody put a PressLayer in the scene and drew something on it. That is a decision,
+            // and it outranks every rule below - the same way FitLayer already leaves an authored
+            // layer's rect alone.
+            //
+            // This is the line that was wrong. It used to read "the sprite is still ours even on an
+            // authored layer", which meant a shape set by hand in the Inspector was replaced by the
+            // generated rounded card the instant Awake ran: correct in the editor, gone on play,
+            // and only changeable during a play session where it could not be saved. A generated
+            // rectangle is a sensible default and a terrible override.
+            if (authoredSprite != null)
+            {
+                layer.sprite = authoredSprite;
+                layer.type = authoredSprite.border != Vector4.zero ? Image.Type.Sliced : Image.Type.Simple;
+                SetAlpha(0f);
+                return;
+            }
+
+            Sprite chosen = shape;
+
+            if (matchOwnArtwork)
+            {
+                // The button's own Image, not any child's: a child is a decoration sitting on the
+                // button, and lighting up the decoration's outline rather than the button's would
+                // be a smaller and stranger glow than either.
+                var own = GetComponent<Image>();
+                if (own != null && own.sprite != null)
+                {
+                    chosen = own.sprite;
+                    layer.preserveAspect = own.preserveAspect;
+                }
+                else
+                {
+                    Debug.LogWarning(
+                        $"UIPressFeedback on '{name}' is set to match its own artwork, but there is " +
+                        "no Image with a sprite on it. Falling back to the shape in the slot.", this);
+                }
+            }
+
+            layer.sprite = chosen;
+
+            // A sprite with no border cannot be sliced. Simple draws it stretched to the layer's
+            // rect, which is what a silhouette wants anyway.
+            bool sliceable = chosen != null && chosen.border != Vector4.zero;
+            layer.type = sliceable ? Image.Type.Sliced : Image.Type.Simple;
+
+            SetAlpha(0f);
+        }
 
         /// <summary>
         /// Sizes the layer to the button's on-screen rect and undoes the button's own scale.
@@ -159,8 +248,8 @@ namespace NsoloGame.Unity
             // own space — which the parent's scale stretches — so it has to be divided back out.
             layerRect.anchoredPosition = new Vector2(glowOffset.x / sx, glowOffset.y / sy);
             layerRect.sizeDelta = new Vector2(
-                Mathf.Max(0f, size.x * Mathf.Abs(sx) + glowPadding.x),
-                Mathf.Max(0f, size.y * Mathf.Abs(sy) + glowPadding.y));
+                Mathf.Max(0f, size.x * Mathf.Abs(sx) * glowScale + glowPadding.x),
+                Mathf.Max(0f, size.y * Mathf.Abs(sy) * glowScale + glowPadding.y));
             layerRect.localScale = new Vector3(1f / sx, 1f / sy, 1f);
         }
 
@@ -218,7 +307,17 @@ namespace NsoloGame.Unity
         public void SetShape(Sprite value)
         {
             shape = value;
-            if (layer != null) layer.sprite = value;
+            if (layer != null) ApplyShape();
+        }
+
+        /// <summary>
+        /// Switches the glow to the shape of the button's own picture, and repaints it if the layer
+        /// already exists. Used by <see cref="NsoloElement"/> for the "Match" shape.
+        /// </summary>
+        public void MatchArtwork()
+        {
+            matchOwnArtwork = true;
+            if (layer != null) ApplyShape();
         }
 
         public void OnPointerDown(PointerEventData eventData)
@@ -289,7 +388,7 @@ namespace NsoloGame.Unity
         {
             if (layer == null) return;
 
-            Color c = layer.color;
+            Color c = glowColor;
             c.a = a;
             layer.color = c;
         }

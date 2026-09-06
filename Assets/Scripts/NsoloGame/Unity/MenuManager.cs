@@ -454,6 +454,32 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
+        /// The same handover as <see cref="StartOnlineGame"/>, for a match this device is walking
+        /// back into rather than beginning. Separate only because the controller has two entry
+        /// points and this one must not deal a new board — everything the menu itself has to do is
+        /// identical, since a rejoined game needs the gameplay view and the online chrome exactly
+        /// as a fresh one does.
+        /// </summary>
+        public void ResumeOnlineGame(NsoloGame.Net.NetworkMatch match)
+        {
+            Time.timeScale = 1f;
+            isPaused = false;
+            SetGameplayVisible(true);
+            ResolveGameController();
+            SubscribeToGameOver();
+            HideAllPanels();
+            ApplyGameplayChrome(GameMode.Online);
+
+            if (gameController == null)
+            {
+                Debug.LogError("MenuManager: GameController not assigned.");
+                return;
+            }
+
+            gameController.ResumeOnlineGame(match);
+        }
+
+        /// <summary>
         /// Clears the menu panels without touching the online screens, which
         /// <see cref="OnlineFlowController"/> owns and toggles itself.
         /// </summary>
