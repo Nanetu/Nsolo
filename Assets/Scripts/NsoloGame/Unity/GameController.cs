@@ -381,16 +381,12 @@ namespace NsoloGame.Unity
             uiManager.ClearHighlights();
             RefreshActionButton();
 
-            // The menu loop carries on through the arrangement phase, and the game loop takes over
-            // at START. Arranging used to be silent — a deliberate choice that read as a bug from
-            // the player's seat: the music cuts out the moment the board appears, and the first
-            // thing the game does after they pick a mode is go quiet on them. Holding the menu
-            // track here keeps a continuous bed under the whole pre-game, and makes committing the
-            // formation the moment the score changes rather than the moment sound returns.
-            //
-            // Costs nothing when arriving from a menu, which is every path here: PlayMusic ignores
-            // a request for the track already running, so this is a no-op rather than a restart.
-            AudioManager.StartMenuMusic();
+            // Arranging happens in silence: the menu loop fades out as the board appears, and the
+            // game loop comes in at START. Carrying the menu track through the arrangement left the
+            // only change of music as a straight cut from one track to the other at START; a quiet
+            // stretch in between gives each track a clean end and a clean start, and makes
+            // committing the formation the moment the sound comes back.
+            AudioManager.Silence();
             TutorialCoach.Show(TutorialTip.ArrangeStones);
         }
 

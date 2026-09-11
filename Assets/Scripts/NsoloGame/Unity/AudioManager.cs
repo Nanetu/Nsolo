@@ -24,6 +24,11 @@ namespace NsoloGame.Unity
         [Header("Music")]
         [Tooltip("Loops on the welcome/menu screens.")]
         [SerializeField] private AudioClip menuMusic;
+        [Tooltip("How loud the menu loop plays, as a share of the music volume. A developer " +
+                 "setting, not a player one: the pause-menu slider still scales all music, and " +
+                 "this is applied on top of it, so the menus always sit this much quieter than " +
+                 "play whatever the slider says. Can be tuned by ear during Play mode.")]
+        [SerializeField, Range(0f, 1f)] private float menuMusicLevel = 0.5f;
         [Tooltip("Loops during play. Starts when the player presses START to commit their formation.")]
         [SerializeField] private AudioClip gameMusic;
         [SerializeField] private float musicCrossfadeSeconds = 0.6f;
@@ -108,7 +113,7 @@ namespace NsoloGame.Unity
             PlayerPrefs.Save();
 
             // Skipped mid-crossfade so the fade coroutine stays in charge of the music source.
-            if (fade == null && musicSource != null) musicSource.volume = musicVolume;
+            if (fade == null && musicSource != null) musicSource.volume = LevelFor(currentMusic);
         }
 
         public void SetSfxVolume(float value)
@@ -121,8 +126,25 @@ namespace NsoloGame.Unity
 
         private void ApplyVolumes()
         {
-            if (musicSource != null) musicSource.volume = musicVolume;
+            if (musicSource != null) musicSource.volume = LevelFor(currentMusic);
             if (sfxSource != null) sfxSource.volume = sfxVolume;
+        }
+
+        /// <summary>
+        /// Where the music source settles for <paramref name="clip"/>: the player's music volume,
+        /// with <see cref="menuMusicLevel"/> on top of it when the clip is the menu loop.
+        /// </summary>
+        private float LevelFor(AudioClip clip) =>
+            clip != null && clip == menuMusic ? musicVolume * menuMusicLevel : musicVolume;
+
+        /// <summary>
+        /// Lets <see cref="menuMusicLevel"/> be tuned by ear: moving it in the Inspector during Play
+        /// mode is heard at once, rather than at the next change of track.
+        /// </summary>
+        private void OnValidate()
+        {
+            if (Application.isPlaying && fade == null && musicSource != null)
+                musicSource.volume = LevelFor(currentMusic);
         }
 
         // ── Music ─────────────────────────────────────────────────────────
@@ -204,11 +226,12 @@ namespace NsoloGame.Unity
 
             for (float t = 0f; t < 1f; t += Time.unscaledDeltaTime / half)
             {
-                musicSource.volume = Mathf.Lerp(0f, musicVolume, t);
+                // Read every frame rather than once, so the slider moving mid-fade is honoured.
+                musicSource.volume = Mathf.Lerp(0f, LevelFor(clip), t);
                 yield return null;
             }
 
-            musicSource.volume = musicVolume;
+            musicSource.volume = LevelFor(clip);
             fade = null;
         }
 
