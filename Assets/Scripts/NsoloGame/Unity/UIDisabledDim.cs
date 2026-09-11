@@ -65,7 +65,7 @@ namespace NsoloGame.Unity
                 // UIPressFeedback's own layer animates its alpha under a finger. Anything that
                 // writes to it from outside would be fighting that, and it is invisible at rest
                 // anyway, so there is nothing here to dim.
-                if (graphic.gameObject.name == "PressLayer") continue;
+                if (UIPressFeedback.IsLayerName(graphic.gameObject.name)) continue;
 
                 graphics.Add(graphic);
                 authoredAlpha.Add(graphic.color.a);

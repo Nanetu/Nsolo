@@ -111,7 +111,7 @@ namespace NsoloGame.Unity
             // the glow was the same shape as its button, but it also meant the one thing anybody
             // would want to nudge existed only for the length of a play session. Authoring the
             // object makes it editable like anything else; this just finds it.
-            Transform authored = transform.Find(LayerName);
+            Transform authored = FindAuthoredLayer();
             layerIsAuthored = authored != null;
 
             var layerRect = layerIsAuthored
@@ -142,6 +142,70 @@ namespace NsoloGame.Unity
 
         /// <summary>Child object name the component looks for, and gives the one it builds.</summary>
         public const string LayerName = "PressLayer";
+
+        /// <summary>
+        /// Whether a child's name marks it as the press layer: "PressLayer" itself, or the name
+        /// Unity gives a duplicate of it.
+        ///
+        /// Duplicating an existing layer is the natural way to make a new one — copy it, drag it
+        /// onto another button, give it a picture — and Unity renames the copy on the way. Matching
+        /// only the exact name meant that copy was silently ignored: the button built a generated
+        /// layer of its own, and the copy sat on top as a static image, fully visible and answering
+        /// nothing.
+        /// </summary>
+        public static bool IsLayerName(string objectName)
+        {
+            if (objectName == null || !objectName.StartsWith(LayerName, System.StringComparison.Ordinal))
+                return false;
+
+            string suffix = objectName.Substring(LayerName.Length);
+            if (suffix.Length == 0) return true;
+
+            // Unity's duplicate suffix in whichever numbering scheme the project uses: "PressLayer
+            // (1)", "PressLayer.1" or "PressLayer_1". Anything else is a different object that just
+            // happens to start with the same word.
+            if (suffix.StartsWith(" (") && suffix.EndsWith(")")) suffix = suffix.Substring(2, suffix.Length - 3);
+            else if (suffix[0] == '.' || suffix[0] == '_') suffix = suffix.Substring(1);
+            else return false;
+
+            if (suffix.Length == 0) return false;
+            foreach (char c in suffix)
+                if (!char.IsDigit(c)) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// The authored layer among this button's direct children, or null when there is none.
+        ///
+        /// A button has one glow, so a second layer is a mistake — almost always a copy made next
+        /// to the original. The last one wins, because that is where Unity puts a fresh duplicate
+        /// and where a layer dragged in from another button lands: it is the one somebody has just
+        /// been working on. The others are switched off for the session, since left alone they are
+        /// drawn at whatever alpha they were authored with, permanently, and the warning says which
+        /// one to delete.
+        /// </summary>
+        private Transform FindAuthoredLayer()
+        {
+            Transform found = null;
+
+            for (int i = 0; i < transform.childCount; i++)
+            {
+                Transform child = transform.GetChild(i);
+                if (!IsLayerName(child.name)) continue;
+
+                if (found != null)
+                {
+                    Debug.LogWarning(
+                        $"UIPressFeedback on '{name}' has more than one PressLayer. Using " +
+                        $"'{child.name}' and hiding '{found.name}' — delete the one you don't want.", this);
+                    found.gameObject.SetActive(false);
+                }
+
+                found = child;
+            }
+
+            return found;
+        }
 
         /// <summary>
         /// Points the layer at whatever it should be drawn as, and picks the fill mode to match.
