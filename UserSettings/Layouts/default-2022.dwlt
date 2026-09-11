@@ -69,8 +69,8 @@ MonoBehaviour:
     y: 0
     width: 278
     height: 579.3333
-  m_MinSize: {x: 275, y: 50}
-  m_MaxSize: {x: 4000, y: 4000}
+  m_MinSize: {x: 276, y: 71}
+  m_MaxSize: {x: 4001, y: 4021}
   m_ActualView: {fileID: 14}
   m_Panes:
   - {fileID: 14}
@@ -95,8 +95,8 @@ MonoBehaviour:
     y: 0
     width: 247.33333
     height: 343.33334
-  m_MinSize: {x: 200, y: 200}
-  m_MaxSize: {x: 4000, y: 4000}
+  m_MinSize: {x: 201, y: 221}
+  m_MaxSize: {x: 4001, y: 4021}
   m_ActualView: {fileID: 15}
   m_Panes:
   - {fileID: 15}
@@ -271,8 +271,8 @@ MonoBehaviour:
     y: 0
     width: 754.6667
     height: 343.33334
-  m_MinSize: {x: 200, y: 200}
-  m_MaxSize: {x: 4000, y: 4000}
+  m_MinSize: {x: 202, y: 221}
+  m_MaxSize: {x: 4002, y: 4021}
   m_ActualView: {fileID: 12}
   m_Panes:
   - {fileID: 16}
@@ -390,7 +390,7 @@ MonoBehaviour:
     m_SkipHidden: 0
     m_SearchArea: 1
     m_Folders:
-    - Assets/Audio
+    - Assets/Materials/Menu/Figma
     m_Globs: []
     m_OriginalText: 
     m_ImportLogFlags: 0
@@ -398,16 +398,16 @@ MonoBehaviour:
   m_ViewMode: 1
   m_StartGridSize: 64
   m_LastFolders:
-  - Assets/Audio
+  - Assets/Materials/Menu/Figma
   m_LastFoldersGridSize: -1
   m_LastProjectPath: C:\Users\dell\Nsolo
   m_LockTracker:
     m_IsLocked: 0
   m_FolderTreeState:
-    scrollPos: {x: 0, y: 2.5000916}
-    m_SelectedIDs: 248b0000
-    m_LastClickedID: 35620
-    m_ExpandedIDs: 000000000c8b00000e8b0000108b0000128b0000148b00002a8b000000ca9a3bffffff7f
+    scrollPos: {x: 0, y: 88.000275}
+    m_SelectedIDs: 48890000
+    m_LastClickedID: 35144
+    m_ExpandedIDs: 00000000d8880000da880000dc880000de880000e0880000f888000000ca9a3bffffff7f
     m_RenameOverlay:
       m_UserAcceptedRename: 0
       m_Name: 
@@ -435,7 +435,7 @@ MonoBehaviour:
     scrollPos: {x: 0, y: 0}
     m_SelectedIDs: 
     m_LastClickedID: 0
-    m_ExpandedIDs: 000000000c8b00000e8b0000108b0000128b0000148b0000
+    m_ExpandedIDs: 00000000d8880000da880000dc880000de880000e0880000
     m_RenameOverlay:
       m_UserAcceptedRename: 0
       m_Name: 
@@ -487,7 +487,7 @@ MonoBehaviour:
       m_Icon: {fileID: 0}
       m_ResourceFile: 
     m_NewAssetIndexInList: -1
-    m_ScrollPosition: {x: 0, y: 0}
+    m_ScrollPosition: {x: 0, y: 876}
     m_GridSize: 64
   m_SkipHiddenPackages: 0
   m_DirectoriesAreaWidth: 207
@@ -532,7 +532,7 @@ MonoBehaviour:
     m_ControlHash: -371814159
     m_PrefName: Preview_InspectorPreview
   m_LastInspectedObjectInstanceID: -1
-  m_LastVerticalScrollValue: 0
+  m_LastVerticalScrollValue: 375.30002
   m_GlobalObjectId: 
   m_InspectorMode: 0
   m_LockTracker:
@@ -575,9 +575,9 @@ MonoBehaviour:
   m_SceneHierarchy:
     m_TreeViewState:
       scrollPos: {x: 0, y: 0}
-      m_SelectedIDs: 0e550000
+      m_SelectedIDs: 667e0000
       m_LastClickedID: 0
-      m_ExpandedIDs: d2faffff4e780000647a0000c6800000f082000016860000
+      m_ExpandedIDs: aefaffff8e760000e47600004a780000667a0000987e0000487f0000ce800000b08100000c8200004e83000086830000d8830000
       m_RenameOverlay:
         m_UserAcceptedRename: 0
         m_Name: 
@@ -944,9 +944,9 @@ MonoBehaviour:
   m_PlayAudio: 0
   m_AudioPlay: 0
   m_Position:
-    m_Target: {x: 1417.9774, y: 989.75977, z: 0}
+    m_Target: {x: 1216.6532, y: 962.7324, z: 0}
     speed: 2
-    m_Value: {x: 1417.9774, y: 989.75977, z: 0}
+    m_Value: {x: 1216.6532, y: 962.7324, z: 0}
   m_RenderMode: 0
   m_CameraMode:
     drawMode: 0
@@ -996,9 +996,9 @@ MonoBehaviour:
     speed: 2
     m_Value: {x: 0, y: 0, z: 0, w: 1}
   m_Size:
-    m_Target: 338.22458
+    m_Target: 267.7213
     speed: 2
-    m_Value: 338.22458
+    m_Value: 267.7213
   m_Ortho:
     m_Target: 1
     speed: 2
