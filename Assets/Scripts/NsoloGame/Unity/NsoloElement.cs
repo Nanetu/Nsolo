@@ -19,21 +19,6 @@ namespace NsoloGame.Unity
     [DisallowMultipleComponent]
     public class NsoloElement : MonoBehaviour
     {
-        /// <summary>How the press glow is shaped. Auto reads it off the button's proportions.</summary>
-        public enum Shape
-        {
-            [InspectorName("Auto (work it out from the size)")] Auto = 0,
-            [InspectorName("Pill (long and thin)")] Pill = 1,
-            [InspectorName("Card (square-ish)")] Card = 2,
-            [InspectorName("None (no glow, just the squash)")] None = 3,
-
-            // For anything Auto cannot describe: circles, arrows, icons, a knob on a dial. Auto
-            // only ever answers "pill" or "card", so every other outline was being approximated by
-            // whichever of those two was less wrong — which on a round button is a lit square with
-            // the button inside it.
-            [InspectorName("Match (glow in the shape of this object's own picture)")] Match = 4,
-        }
-
         [Tooltip("What this object is. Everything else on this component is optional.")]
         [SerializeField] private ElementId id = ElementId.None;
 
@@ -46,9 +31,6 @@ namespace NsoloGame.Unity
         [Tooltip("On: the button squashes and glows under a finger. Turn off only for something " +
                  "that should not react, like a label you made tappable by mistake.")]
         [SerializeField] private bool addPressFeedback = true;
-
-        [Tooltip("The shape of the glow. Leave on Auto.")]
-        [SerializeField] private Shape pressShape = Shape.Auto;
 
         /// <summary>What this object is. Read by <see cref="NsoloUI"/> when it builds the register.</summary>
         public ElementId Id => id;
@@ -197,32 +179,12 @@ namespace NsoloGame.Unity
             }
         }
 
-        private void AttachPressFeedback()
-        {
-            if (pressShape == Shape.None)
-            {
-                UIPressFeedback.Attach(gameObject, null);
-                return;
-            }
-
-            if (pressShape == Shape.Match)
-            {
-                // No sprite to hand over: the glow reads the object's own Image for itself, which
-                // also means re-exporting the picture changes the glow with it.
-                UIPressFeedback attached = UIPressFeedback.Attach(gameObject, null);
-                attached?.MatchArtwork();
-                return;
-            }
-
-            Sprite sprite;
-            switch (pressShape)
-            {
-                case Shape.Pill: sprite = UIShapes.Pill; break;
-                case Shape.Card: sprite = UIShapes.Card; break;
-                default: sprite = UIShapes.For(transform as RectTransform); break;
-            }
-
-            UIPressFeedback.Attach(gameObject, sprite);
-        }
+        /// <summary>
+        /// Gives the button its press glow. It glows in the shape of its own picture; the rounded
+        /// shape handed over here is only used if it turns out to have none — an invisible hitbox
+        /// over art painted into the background.
+        /// </summary>
+        private void AttachPressFeedback() =>
+            UIPressFeedback.Attach(gameObject, UIShapes.For(transform as RectTransform));
     }
 }
