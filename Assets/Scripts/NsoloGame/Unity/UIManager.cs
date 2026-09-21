@@ -249,11 +249,27 @@ namespace NsoloGame.Unity
         // Keep ShowMessage as an alias so GameController's existing call compiles
         public void ShowMessage(string message, float seconds = 2.5f) => ShowLastMove(message);
 
+        /// <summary>
+        /// Marks the pits the player can actually choose from.
+        ///
+        /// The hole tint below is kept because it costs nothing and does show up on boards whose
+        /// Hole_r_c objects have a visible renderer. On this one they do not — they are bare click
+        /// targets under the painted board — which is why the tint alone left "select one of your
+        /// highlighted pits" pointing at nothing. The glow on the stones themselves is the part
+        /// players can see, and it is the same effect the hint button uses.
+        /// </summary>
         public void HighlightLegalMoves(List<Move> moves)
         {
             ClearHighlights();
             if (moves == null) return;
+
             foreach (var m in moves) SetHoleColor(m.Row, m.Col, legalMoveColor);
+
+            if (stoneVisualizer == null) return;
+
+            var pits = new List<(int row, int col)>(moves.Count);
+            foreach (var m in moves) pits.Add((m.Row, m.Col));
+            stoneVisualizer.SetLegalMoveGlow(pits);
         }
 
         public void ClearHighlights()
@@ -261,6 +277,8 @@ namespace NsoloGame.Unity
             for (int r = 0; r < 4; r++)
                 for (int c = 0; c < 8; c++)
                     ClearHoleColor(r, c);
+
+            stoneVisualizer?.ClearLegalMoveGlow();
         }
 
         public void FlashIllegalMove(int row, int col)

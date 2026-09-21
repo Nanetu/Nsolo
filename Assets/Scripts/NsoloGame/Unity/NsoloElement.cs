@@ -19,15 +19,6 @@ namespace NsoloGame.Unity
     [DisallowMultipleComponent]
     public class NsoloElement : MonoBehaviour
     {
-        /// <summary>How the press glow is shaped. Auto reads it off the button's proportions.</summary>
-        public enum Shape
-        {
-            [InspectorName("Auto (work it out from the size)")] Auto = 0,
-            [InspectorName("Pill (long and thin)")] Pill = 1,
-            [InspectorName("Card (square-ish)")] Card = 2,
-            [InspectorName("None (no glow, just the squash)")] None = 3,
-        }
-
         [Tooltip("What this object is. Everything else on this component is optional.")]
         [SerializeField] private ElementId id = ElementId.None;
 
@@ -40,9 +31,6 @@ namespace NsoloGame.Unity
         [Tooltip("On: the button squashes and glows under a finger. Turn off only for something " +
                  "that should not react, like a label you made tappable by mistake.")]
         [SerializeField] private bool addPressFeedback = true;
-
-        [Tooltip("The shape of the glow. Leave on Auto.")]
-        [SerializeField] private Shape pressShape = Shape.Auto;
 
         /// <summary>What this object is. Read by <see cref="NsoloUI"/> when it builds the register.</summary>
         public ElementId Id => id;
@@ -145,6 +133,8 @@ namespace NsoloGame.Unity
             // A graphic that is not a raycast target is invisible to touch however opaque it looks.
             graphic.raycastTarget = true;
 
+            FreeDecorationsFromTouch();
+
             var button = GetComponent<Button>();
             if (button != null) return;
 
@@ -159,23 +149,42 @@ namespace NsoloGame.Unity
             button.transition = Selectable.Transition.None;
         }
 
-        private void AttachPressFeedback()
+        /// <summary>
+        /// Stops a picture laid on top of this button from eating the taps meant for it.
+        ///
+        /// Anything drawn over a button — a knob on a dial, a badge, an icon sitting on a plate —
+        /// is added as a child Image, and a fresh Image is a raycast target by default. Unity hands
+        /// the touch to the topmost target it hits, so the decoration takes it. Being a child, the
+        /// event then walks up and reaches the Button anyway, which is why this usually goes
+        /// unnoticed — until the decoration is the thing under the finger and the artwork is
+        /// larger, or offset, or sits in a mask, and the walk up never happens. What the player
+        /// sees is a button that answered before the knob was added and stopped afterwards, with
+        /// nothing about the knob suggesting it was responsible.
+        ///
+        /// Only genuinely decorative children are touched. A child with its own Selectable or its
+        /// own event handler is something somebody meant to be clickable in its own right, and
+        /// switching that off would break a nested control to fix a picture.
+        /// </summary>
+        private void FreeDecorationsFromTouch()
         {
-            if (pressShape == Shape.None)
+            foreach (Graphic child in GetComponentsInChildren<Graphic>(true))
             {
-                UIPressFeedback.Attach(gameObject, null);
-                return;
-            }
+                if (child == null || child.gameObject == gameObject) continue;
+                if (!child.raycastTarget) continue;
 
-            Sprite sprite;
-            switch (pressShape)
-            {
-                case Shape.Pill: sprite = UIShapes.Pill; break;
-                case Shape.Card: sprite = UIShapes.Card; break;
-                default: sprite = UIShapes.For(transform as RectTransform); break;
-            }
+                if (child.GetComponent<Selectable>() != null) continue;
+                if (child.GetComponent<UnityEngine.EventSystems.IEventSystemHandler>() != null) continue;
 
-            UIPressFeedback.Attach(gameObject, sprite);
+                child.raycastTarget = false;
+            }
         }
+
+        /// <summary>
+        /// Gives the button its press glow. It glows in the shape of its own picture; the rounded
+        /// shape handed over here is only used if it turns out to have none — an invisible hitbox
+        /// over art painted into the background.
+        /// </summary>
+        private void AttachPressFeedback() =>
+            UIPressFeedback.Attach(gameObject, UIShapes.For(transform as RectTransform));
     }
 }

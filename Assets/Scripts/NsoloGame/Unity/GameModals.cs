@@ -92,7 +92,7 @@ namespace NsoloGame.Unity
     /// Every popup the game raises, driven from two panels rather than five.
     ///
     /// Join Room keeps its own panel because it holds an input field. Everything else — room not
-    /// found, connection lost, forfeit — is the same shape: a title, a body and up to three
+    /// found, connection lost, forfeit — is the same shape: a title, a body and a pair of
     /// buttons. Those share one <see cref="dialog"/> panel, the way TutorialCoach drives every tip
     /// from a single card. Room creation has no popup at all: the lobby screen already shows the
     /// code and the waiting state, so a modal doing the same job was just clutter.
@@ -127,10 +127,11 @@ namespace NsoloGame.Unity
         [Tooltip("Right-hand button. Hidden when a dialog needs only one.")]
         [SerializeField] private Button dialogButtonB;
         [SerializeField] private TMP_Text dialogButtonBLabel;
-        [Tooltip("Third button, used only by the disconnect dialog.")]
+        [Tooltip("Optional third button. No dialog needs one today; kept so one can be added " +
+                 "without touching the scene.")]
         [SerializeField] private Button dialogButtonC;
         [SerializeField] private TMP_Text dialogButtonCLabel;
-        [Tooltip("Fourth button. Only the disconnect dialog asks this many questions at once.")]
+        [Tooltip("Optional fourth button. Unused, for the same reason as the third.")]
         [SerializeField] private Button dialogButtonD;
         [SerializeField] private TMP_Text dialogButtonDLabel;
 
@@ -240,7 +241,7 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
-        /// Raises the shared dialog with a title, a body and one to three choices.
+        /// Raises the shared dialog with a title, a body and one to four choices.
         ///
         /// Every question the online game asks goes through here. They differ only in wording and
         /// button count, so giving each its own panel would put three near-identical objects in the
@@ -273,8 +274,9 @@ namespace NsoloGame.Unity
         ///
         /// Positions come from here rather than from wherever the scene left them because the count
         /// varies from one to four and the card has nothing painted on it to align to. A fixed
-        /// position per slot left the three-button disconnect dialog reading out of order — the
-        /// third choice sat above the first two — and gave a fourth nowhere to go.
+        /// position per slot left the disconnect dialog, which asked four questions at once before
+        /// it was cut to two, reading out of order — the third choice sat above the first two — and
+        /// gave the fourth nowhere to go.
         /// </summary>
         private static readonly Vector2[][] ButtonLayouts =
         {
@@ -352,17 +354,24 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
-        /// The match is over because the connection is. Offers a way out rather than a retry: there
-        /// is no saved state to come back to in this pass, so reconnecting to the same game is not
-        /// something that could work.
+        /// The match is over because the connection is. Offers a way out rather than a retry: the
+        /// seat has already been held for its five minutes and nobody came back, so reconnecting to
+        /// this particular game is no longer something that could work.
+        ///
+        /// Two choices, not four. The three ways of starting again — main menu, vs computer, vs
+        /// human — were three buttons asking one question, and the mode screen already asks it
+        /// properly: it is the screen whose whole job is "which kind of game", it holds the online
+        /// option the other two buttons could not, and it has a way back to the menu on it. So they
+        /// collapse into NEW GAME and the card is left with the only decision that is actually
+        /// being made here — stay and look, or move on.
         ///
         /// The first choice is to stay where they are. The board is still on screen underneath —
         /// GameController stops the game without clearing it — and being marched off a position you
         /// were in the middle of reading, because somebody else quit, is its own small insult. The
-        /// other three remain one tap away afterwards: the pause button re-raises this dialog, since
+        /// way out remains one tap away afterwards: the pause button re-raises this dialog, since
         /// with the game over it has nothing else to do.
         /// </summary>
-        public void ShowDisconnected(bool opponentLeft, Action onStay, Action onMenu, Action onPlayComputer, Action onPlayHuman)
+        public void ShowDisconnected(bool opponentLeft, Action onStay, Action onNewGame)
         {
             // Plain language, and specific about which of the two happened, because they call for
             // different feelings — one is bad luck, the other is the opponent leaving.
@@ -372,9 +381,57 @@ namespace NsoloGame.Unity
                     ? "Your opponent has left the game.\n\nThis match can't continue, but you can stay and look at the final position."
                     : "The connection was lost.\n\nThis match can't continue, but you can stay and look at the final position.",
                 new Choice("STAY ON BOARD", onStay),
-                new Choice("MAIN MENU", onMenu),
-                new Choice("VS COMPUTER", onPlayComputer),
-                new Choice("VS HUMAN", onPlayHuman));
+                new Choice("NEW GAME", onNewGame));
+        }
+
+        /// <summary>
+        /// There is a game still waiting for this player, and they were not asked whether they
+        /// wanted to leave it — the app was killed while they were in it.
+        ///
+        /// The remaining time is on the card because it is the whole basis of the decision. "Rejoin
+        /// your game?" with no clock behind it invites a player to sit and think about it, and this
+        /// is the one question where thinking about it is the wrong move; a minute and a half on
+        /// screen says plainly that the offer is running out and that somebody is waiting.
+        ///
+        /// Unlike every other dialog here, this one is raised without the player having done
+        /// anything, so its dismissal has to be genuinely harmless: <paramref name="onDismiss"/>
+        /// only puts the card away and forgets the match. Nothing is conceded and nobody is told
+        /// anything — the seat simply runs out the way it would have anyway.
+        /// </summary>
+        public void ShowRejoinOffer(int secondsLeft, Action onRejoin, Action onDismiss)
+        {
+            int whole = Mathf.Max(secondsLeft, 0);
+            string clock = $"{whole / 60}:{whole % 60:00}";
+
+            ShowDialog(
+                "Game In Progress",
+                $"You left a game that is still going.\n\nYour opponent is holding your place for another {clock}.",
+                new Choice("REJOIN", onRejoin),
+                new Choice("NOT NOW", onDismiss));
+        }
+
+        /// <summary>
+        /// The rejoin was accepted and is under way. Same card, no buttons — a returning player has
+        /// nothing useful to decide while the room is being reached, and offering them a cancel
+        /// would mean handling a half-finished rejoin for no gain.
+        /// </summary>
+        public void ShowRejoining()
+        {
+            ShowDialog("Rejoining", "Getting you back into your game...");
+        }
+
+        /// <summary>
+        /// The room named by the saved match is not there any more: the seat ran out, or the
+        /// opponent gave up and left. Distinct from <see cref="ShowRoomNotFound"/>, which is about
+        /// a code somebody typed — nobody typed this one, so offering to try it again would be
+        /// offering to fail the same way twice.
+        /// </summary>
+        public void ShowRejoinFailed(Action onDismiss)
+        {
+            ShowDialog(
+                "Game Has Ended",
+                "That game is no longer running.\n\nYour opponent either left or the time ran out.",
+                new Choice("OK", onDismiss));
         }
 
         /// <summary>

@@ -126,8 +126,17 @@ element(s) bound`, no "nothing to bind" warnings, no exceptions.
 
 ## 1d. Fourth pass — the press glow
 
-The glow is a `PressLayer` GameObject built at runtime in `UIPressFeedback.Awake()`. It is not in
-the scene, which is why there is nothing to find and nothing to scale by hand.
+The glow is a `PressLayer` built at runtime in `UIPressFeedback.Awake()` and never saved, so there
+is nothing in the scene to find or fit. It takes the shape of whatever the button looks like:
+
+1. **The button's own picture**, as a white silhouette drawn by `Resources/NsoloUISilhouette.shader`.
+   The sprite supplies only its alpha, so the transparent padding Figma exports around an oval never
+   glows. The layer is stretched over the button and copies its Image settings, so the outline
+   matches to the pixel.
+2. **The largest picture inside the button**, when the button itself is an invisible hitbox — an
+   icon on a transparent button, like Quit.
+3. **A rounded rectangle** (`UIShapes`, pill or card by proportion) for hitboxes with nothing
+   inside, over art painted into the background. The two fixes below are in this path.
 
 It was never the wrong size — it stretched to the button's rect exactly. Two other things were
 wrong, both caused by how the Figma buttons are sized. **Every** button in the game has a
@@ -137,7 +146,7 @@ across and 6× down.
 - **Corners smeared.** The whole point of the 9-sliced sprite is to hold the corner radius constant
   while the middle stretches, and that only works when the button is stretched by *sizeDelta*.
   Scaling the parent instead scaled the corners with it — 4× horizontally, 6× vertically — so the
-  rounded ends came out as lopsided ovals overhanging the artwork. `FitLayer()` now gives the layer
+  rounded ends came out as lopsided ovals overhanging the artwork. `FitToHitbox()` now gives the layer
   the button's *effective* size and the inverse of its scale. They cancel to the same on-screen
   rectangle, but the border is drawn in unscaled units. The press animation still rides on top.
 - **Every button got a pill.** `UIShapes.For` judged shape from `rect.size`, which is 160×30 for
@@ -147,7 +156,7 @@ across and 6× down.
 Verified in play mode across 18 buttons: layer size matches button size to the pixel in every case,
 and the sprite is now `NsoloCard` for the cards and `NsoloPill` for the pills.
 
-If you still want the glow tighter or looser than the button, the knobs are on `UIPressFeedback`:
+Nothing is fitted by hand. The knobs on `UIPressFeedback` are
 `pressAlpha` (brightness, 0.14), `pressedScale` (how far the button shrinks, 0.97), `seconds`
 (0.09), and `idleAlpha` for a slow shimmer on one hero button per screen. The corner radius itself
 is `UIShapes.Rounded(30, …)` for pills and `(16, …)` for cards.
@@ -296,7 +305,11 @@ was empty, so Undo stayed live and invisible in two-player games. It goes throug
 
 ### Still open
 
-**Reconnect.** `PlayerTtl` and `EmptyRoomTtl` are still zero, so a player the server drops is gone
-for good and their seat with them. Holding the seat open and letting them rejoin needs the host to
-rebroadcast the board on arrival — `NetworkMatch` already has the message for it — plus a "waiting
-for your opponent" state with a grace period. Untested territory that wants two real devices.
+**Reconnect.** Built — see the "Reconnect, in three layers" bullet in `online-wiring.md` for what
+each layer covers. A dropped connection reconnects itself; an app that was killed is offered a
+rejoin on its next launch; and a returning host, which comes back holding no board, is handled by
+moving authority to whichever device still has the position.
+
+Still untested on two real devices, which is what it actually wants. The cases to walk through are:
+joiner killed and relaunched, host killed and relaunched (the one that moves authority), both
+killed, and a rejoin attempted after the five minutes have run out.

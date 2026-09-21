@@ -59,6 +59,25 @@ namespace NsoloGame.Unity
         private readonly List<GameObject> spawnedStones = new List<GameObject>();
         private readonly List<GameObject>[,] stonesByPit = new List<GameObject>[4, 8];
 
+        // ── Legal-move glow ──────────────────────────────────────────────────
+        //
+        // Which pits are currently playable, and the stone renderers that say so. Kept here rather
+        // than in UIManager because the stones are spawned and destroyed on every Refresh: the
+        // renderers UIManager would be holding are dead objects one board update later. Storing the
+        // pits instead means the glow can be put back on the new stones at the end of Refresh,
+        // which is what makes it survive a board update at all.
+        private readonly HashSet<int> glowPits = new HashSet<int>();
+        private readonly Dictionary<int, List<Renderer>> glowRenderers = new Dictionary<int, List<Renderer>>();
+
+        /// <summary>The pit a hint flash currently owns, or -1. Skipped by the pulse so the two
+        /// effects don't write the same emission colour on alternate frames.</summary>
+        private int hintFlashPit = -1;
+
+        private static readonly Color GlowColor = new Color(1f, 0.78f, 0.18f);
+        private const float GlowPulseSpeed = 3.2f;
+        private const float GlowPulseMin = 0.55f;
+        private const float GlowPulseMax = 1.5f;
+
         private StoneLayoutProvider layout;
         private PitStoneAnimator animator;
 
@@ -216,6 +235,11 @@ namespace NsoloGame.Unity
 
             Log($"Pit loop complete. Spawned {spawnedCount} pit stones.");
             Log($"Refresh() complete. Total runtime stones now tracked: {spawnedStones.Count}.");
+
+            // The stones the glow was attached to were destroyed at the top of this method, so it
+            // is re-attached to the ones that replaced them. Without this a highlight set before a
+            // board update would silently go out.
+            RebuildGlowRenderers();
         }
 
         public IEnumerator PlayMoveAnimation(GameBoard startingBoard, MoveResult moveResult)
@@ -372,6 +396,101 @@ namespace NsoloGame.Unity
         }
 
         /// <summary>
+        /// Makes the given pits glow for as long as they stay playable.
+        ///
+        /// The board already had a highlight call, and it did nothing visible: it tinted the
+        /// Hole_r_c renderers, which on this board are the invisible click targets sitting under
+        /// the painted board art, so "select one of your highlighted pits" pointed at pits that
+        /// looked exactly like every other pit. The hint glow was the one highlight players could
+        /// actually see, because it lights the stones rather than the hole. This lights the same
+        /// thing, held rather than flashed, and slowly pulsed so that a board full of playable pits
+        /// reads as an invitation rather than as sixteen hints at once.
+        /// </summary>
+        public void SetLegalMoveGlow(IEnumerable<(int row, int col)> pits)
+        {
+            ClearLegalMoveGlow();
+            if (pits == null) return;
+
+            foreach (var pit in pits)
+            {
+                if (pit.row < 0 || pit.row >= 4 || pit.col < 0 || pit.col >= 8) continue;
+                glowPits.Add(pit.row * 8 + pit.col);
+            }
+
+            RebuildGlowRenderers();
+        }
+
+        /// <summary>Puts every glowing pit back to its normal, unlit stones.</summary>
+        public void ClearLegalMoveGlow()
+        {
+            foreach (var entry in glowRenderers)
+                ExtinguishGlow(entry.Value);
+
+            glowRenderers.Clear();
+            glowPits.Clear();
+        }
+
+        /// <summary>
+        /// Collects the stone renderers for the currently glowing pits and switches their emission
+        /// on. Called both when the highlight changes and after every Refresh, since a Refresh
+        /// replaces the stone objects the previous pass collected.
+        /// </summary>
+        private void RebuildGlowRenderers()
+        {
+            glowRenderers.Clear();
+            if (glowPits.Count == 0) return;
+
+            foreach (int key in glowPits)
+            {
+                List<GameObject> pitStones = stonesByPit[key / 8, key % 8];
+                if (pitStones == null || pitStones.Count == 0) continue;
+
+                var renderers = new List<Renderer>(pitStones.Count);
+                foreach (GameObject stone in pitStones)
+                {
+                    if (stone == null) continue;
+                    Renderer r = stone.GetComponentInChildren<Renderer>();
+                    if (r == null) continue;
+
+                    r.material.EnableKeyword("_EMISSION");
+                    renderers.Add(r);
+                }
+
+                if (renderers.Count > 0) glowRenderers[key] = renderers;
+            }
+        }
+
+        private static void ExtinguishGlow(List<Renderer> renderers)
+        {
+            foreach (Renderer r in renderers)
+            {
+                if (r == null) continue;
+                r.material.SetColor("_EmissionColor", Color.black);
+                r.material.DisableKeyword("_EMISSION");
+            }
+        }
+
+        private void Update()
+        {
+            if (glowRenderers.Count == 0) return;
+
+            // Unscaled, so the glow keeps breathing while a pause menu has frozen the game clock.
+            float wave = 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * GlowPulseSpeed);
+            Color emission = GlowColor * Mathf.Lerp(GlowPulseMin, GlowPulseMax, wave);
+
+            foreach (var entry in glowRenderers)
+            {
+                if (entry.Key == hintFlashPit) continue;
+
+                List<Renderer> renderers = entry.Value;
+                for (int i = 0; i < renderers.Count; i++)
+                {
+                    if (renderers[i] != null) renderers[i].material.SetColor("_EmissionColor", emission);
+                }
+            }
+        }
+
+        /// <summary>
         /// Pulses a warm gold glow on the stones in the given pit once, then fades out.
         /// Called by UIManager when a hint result arrives.
         /// </summary>
@@ -389,7 +508,12 @@ namespace NsoloGame.Unity
             }
             if (renderers.Count == 0) yield break;
 
-            Color glowColor = new Color(1f, 0.78f, 0.18f);
+            Color glowColor = GlowColor;
+
+            // Claimed for the duration so the legal-move pulse leaves this pit alone — otherwise
+            // the hinted pit, which is a legal move by definition, would have both effects writing
+            // its emission colour and the flash would be lost under the pulse.
+            hintFlashPit = row * 8 + col;
 
             // Enable emission
             foreach (var r in renderers)
@@ -422,6 +546,15 @@ namespace NsoloGame.Unity
                 if (r == null) continue;
                 r.material.SetColor("_EmissionColor", Color.black);
                 r.material.DisableKeyword("_EMISSION");
+            }
+
+            // Handed back. If the pit is still a legal move the pulse picks it up again on the next
+            // frame, which needs its emission keyword back on.
+            hintFlashPit = -1;
+            if (glowRenderers.TryGetValue(row * 8 + col, out var stillGlowing))
+            {
+                foreach (Renderer r in stillGlowing)
+                    if (r != null) r.material.EnableKeyword("_EMISSION");
             }
         }
 

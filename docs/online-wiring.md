@@ -356,9 +356,21 @@ Each of these is a decision with a reason, not a gap:
 - **No rematch.** Replaying online needs a "shall we play again" message and a screen for it. Restart
   on the game-over panel returns to the menu in online mode rather than dealing a board nobody is
   playing on.
-- **No reconnect.** There is no saved state to come back to, so the disconnect modal offers a way out
-  rather than a retry. `RoomOptions.PlayerTtl` and `EmptyRoomTtl` are pinned at 0 with a comment
-  saying what they become when persistence lands.
+- **Reconnect, in three layers.** A drop no longer ends the match. `RoomOptions.PlayerTtl` and
+  `EmptyRoomTtl` hold the room and the seat for five minutes, and the device carries a Photon
+  `UserId` that survives a restart, so the server can tell a returning player from a new one.
+  - *Connection dropped, app alive.* `PhotonMatchTransport.OnDisconnected` calls
+    `ReconnectAndRejoin` itself. No modal and nothing to answer — the player is put back on their
+    board, and `NetworkMatch`'s resume exchange brings them up to date.
+  - *App killed.* Nothing is left to reconnect, so the room code and seat are written to
+    `SavedMatch` while play is under way and the next launch offers "Game In Progress — REJOIN".
+    Accepting calls `IMatchTransport.RejoinRoom`, which is `RejoinRoom` and not `JoinRoom`: the
+    held seat still counts against `MaxPlayers`, so an ordinary join asks to be a third player.
+  - *The returning player was the host.* They come back with no board, so authority moves rather
+    than the position: a client receiving a resume request that says `hasBoard: false` promotes
+    itself and answers with its own mirror, which is safe because every result it holds was
+    replayed and checked against the host's board before it was adopted. This is what protocol v3
+    added.
 - **No online stats.** The whole profile is keyed by AI difficulty; filing online games under a
   difficulty nobody played would make those numbers mean nothing. Online needs its own axis — an
   opponent context rather than a difficulty — which is a save-data migration and belongs with the
