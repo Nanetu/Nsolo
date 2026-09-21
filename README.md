@@ -1,7 +1,5 @@
 # Nsolo
 
-**Repository:** https://github.com/Nanetu/Nsolo
-
 Nsolo is a Unity implementation of a four-row mancala-family board game for Android. It supports
 three ways to play:
 
