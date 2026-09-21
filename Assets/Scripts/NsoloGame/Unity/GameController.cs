@@ -161,7 +161,32 @@ namespace NsoloGame.Unity
         private int formationHeld;
         private int formationHeldFromRow;
         private int formationHeldFromCol;
-        private System.Random formationRandom = new System.Random();
+
+        /// <summary>
+        /// The prompt shown at the start of every turn.
+        ///
+        /// It used to say "select one of your highlighted pits", which asked the player to look for
+        /// something that was not on screen — the highlight tinted the invisible hole colliders
+        /// under the board art, so nothing lit up. The glow is real now, and the wording says where
+        /// to look as well as what to look for: the board is always turned so that the side you are
+        /// playing is the near one, in every mode, so "your two rows at the bottom" is true for the
+        /// joiner online and for player 2 in hot-seat as much as it is for player 1.
+        /// </summary>
+        private const string SelectPitPrompt = "Tap a glowing pit in your two rows at the bottom";
+
+        /// <summary>
+        /// Whether each seat is still owed its opening glow, indexed by player.
+        ///
+        /// The glow is an instruction, not a readout, and an instruction that is always on stops
+        /// being read — sixteen pulsing pits every single turn is wallpaper by the third move, and
+        /// it buries the hint, which uses the same effect to say something far more specific. It
+        /// earns its place once: on a seat's first turn, when "which of these can I even tap" is a
+        /// real question. After that the board is plain and HINT is there for anyone who wants it.
+        ///
+        /// Per seat rather than per game, because in hot-seat the device changes hands and the
+        /// second player's first turn is their first turn, whatever move number the game is on.
+        /// </summary>
+        private readonly bool[] openingHighlightPending = new bool[3];
 
         // The bottom pill is one button wearing two hats in single-player and a third in hot-seat
         // — see OnActionButtonPressed.
@@ -308,6 +333,11 @@ namespace NsoloGame.Unity
             System.Array.Clear(capturesThisGame, 0, capturesThisGame.Length);
             System.Array.Clear(longestRelayThisGame, 0, longestRelayThisGame.Length);
 
+            // Both seats are owed their opening glow again. Reset per game rather than per app run,
+            // so a second game explains itself to a second player the same way the first did.
+            openingHighlightPending[1] = true;
+            openingHighlightPending[2] = true;
+
             bool hotSeat = mode == GameMode.VersusHuman;
             bool online = mode == GameMode.Online;
 
@@ -357,10 +387,11 @@ namespace NsoloGame.Unity
                 // real.
                 StartCoroutine(OrientBoardForLocalSeat());
             }
-            else
-            {
-                GenerateAIFormation();
-            }
+
+            // Nothing is laid out for the computer either, and for the same reason it is not laid
+            // out for an online opponent: its formation is a copy of the player's, so it cannot be
+            // built until the player has finished building theirs. CopyPlayerFormationToAI runs at
+            // START. Until then the far rows hold the dealt two-per-pit board.
 
             // Each background captions its two score boxes differently, so which seat belongs on
             // which side is a property of the mode, not a constant. Set before the first draw.
@@ -454,27 +485,36 @@ namespace NsoloGame.Unity
         // ── Pre-Game Formation Phase ─────────────────────────────────────────
 
         /// <summary>
-        /// Randomly redistribute the AI's own 32 stones across its 16 pits, lightly
-        /// biased toward the inner row, so the AI doesn't enter play with the
-        /// passive uniform 2-per-pit shape.
+        /// Gives the computer the formation the player just built, turned round onto its own side.
+        ///
+        /// This replaces a random scatter, which was wrong twice over. It looked wrong — sixteen
+        /// pits filled by repeated coin flips is a lumpy blob, not something anyone would lay out
+        /// on purpose, and it sat opposite a side the player had just arranged deliberately. And it
+        /// played wrong: the shape you start from decides which openings capture, so dealing the
+        /// computer a different one made every game start from an unequal position, in a direction
+        /// nobody chose and nobody could see.
+        ///
+        /// Copying is the fix, and the rotation is what makes it a copy rather than a reflection.
+        /// Nsolo's symmetry is a half-turn of the whole board, (r, c) -> (3 - r, 7 - c): that map
+        /// sends each player's sowing cycle onto the other's and each column of captures onto the
+        /// matching one, which a simple top-to-bottom mirror does not — mirroring keeps the columns
+        /// but reverses the direction of sowing, so it would hand the computer a subtly different
+        /// position while looking like the same one. A half-turn is also what happens physically:
+        /// the computer sets up the player's arrangement as seen from its own side of the board.
+        ///
+        /// The opening is therefore exactly symmetric, and whatever advantage remains is the
+        /// first-move advantage the difficulty setting already decides who gets.
         /// </summary>
-        private void GenerateAIFormation()
+        private void CopyPlayerFormationToAI()
         {
-            int[] aiRows = aiPlayer == 1 ? new[] { 0, 1 } : new[] { 2, 3 };
-            int innerRow = aiPlayer == 1 ? 1 : 2;
-            int outerRow = aiPlayer == 1 ? 0 : 3;
-            int cols = GameBoard.Cols;
-            int totalStones = cols * aiRows.Length * 2; // 32
-
-            foreach (int r in aiRows)
-                for (int c = 0; c < cols; c++)
-                    gameBoard.Set(r, c, 0);
-
-            for (int i = 0; i < totalStones; i++)
+            for (int r = 0; r < GameBoard.Rows; r++)
             {
-                int c = formationRandom.Next(cols);
-                int r = formationRandom.NextDouble() < 0.6 ? innerRow : outerRow;
-                gameBoard.Set(r, c, gameBoard.Get(r, c) + 1);
+                if (!OwnsRow(humanPlayer, r)) continue;
+
+                for (int c = 0; c < GameBoard.Cols; c++)
+                {
+                    gameBoard.Set(GameBoard.Rows - 1 - r, GameBoard.Cols - 1 - c, gameBoard.Get(r, c));
+                }
             }
         }
 
@@ -523,6 +563,12 @@ namespace NsoloGame.Unity
                 return;
             }
 
+            // The computer mirrors whatever the player has just built, so its side is filled in
+            // here rather than at deal time — and redrawn, since the far rows have been showing the
+            // dealt board up to this point.
+            CopyPlayerFormationToAI();
+            uiManager.UpdateDisplay(gameBoard);
+
             gameState = gameBoard.CurrentPlayer == humanPlayer ? GameState.HumanTurn : GameState.AiThinking;
 
             // The clock starts the moment the player commits their formation, whichever side moves
@@ -539,9 +585,7 @@ namespace NsoloGame.Unity
             if (gameState == GameState.HumanTurn)
             {
                 uiManager.ShowStatus("Your turn");
-                uiManager.ShowLastMove("Select one of your highlighted pits");
-                List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
-                uiManager.HighlightLegalMoves(legalMoves);
+                if (HighlightOpeningMoves(humanPlayer)) uiManager.ShowLastMove(SelectPitPrompt);
                 TutorialCoach.Show(TutorialTip.YourPits);
             }
             else
@@ -550,6 +594,28 @@ namespace NsoloGame.Unity
                 uiManager.ClearHighlights();
                 StartAIMove();
             }
+        }
+
+        /// <summary>
+        /// Lights the pits a seat may play, but only the first time that seat is asked to move.
+        ///
+        /// Returns whether it actually lit anything, because the caption goes with the light: the
+        /// prompt names a glowing pit, so a turn with nothing glowing must not be told to look for
+        /// one. On every later turn this clears instead, which also leaves the last-move line
+        /// saying what just happened rather than overwriting it with an instruction the player
+        /// stopped needing several moves ago.
+        /// </summary>
+        private bool HighlightOpeningMoves(int player)
+        {
+            if (player is not (1 or 2) || !openingHighlightPending[player])
+            {
+                uiManager.ClearHighlights();
+                return false;
+            }
+
+            openingHighlightPending[player] = false;
+            uiManager.HighlightLegalMoves(gameEngine.GetLegalMoves(gameBoard, player));
+            return true;
         }
 
         private bool IsHumanRow(int row)
@@ -739,6 +805,11 @@ namespace NsoloGame.Unity
             }
 
             gameState = GameState.ApplyingMove;
+
+            // The glow asked to be tapped and it has been. Put out here, on the press, rather than
+            // left burning under the player's own stones for the length of the sowing animation.
+            uiManager.ClearHighlights();
+
             pendingMove = selected;
             activeMoveRoutine = StartCoroutine(ApplyHumanMoveCoroutine());
         }
@@ -836,8 +907,10 @@ namespace NsoloGame.Unity
             // during the move animation. This reverts the human's last move and the AI's reply.
             uiManager.SetUndoInteractable(boardHistory.Count > 0);
             RefreshActionButton();
-            List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
-            uiManager.HighlightLegalMoves(legalMoves);
+
+            // Reached on the player's own opening move too, when the computer had the first move —
+            // so the glow is asked for here rather than assumed to have been spent at START.
+            if (HighlightOpeningMoves(humanPlayer)) uiManager.ShowLastMove(SelectPitPrompt);
         }
 
         // ── Hot-seat (local two-player) ──────────────────────────────────
@@ -938,8 +1011,7 @@ namespace NsoloGame.Unity
             // thinks for itself — the AI today, a remote player later — leaves the board plain.
             if (agent != null && agent.RequiresBoardInput)
             {
-                uiManager.HighlightLegalMoves(gameEngine.GetLegalMoves(gameBoard, player));
-                uiManager.ShowLastMove("Select one of your highlighted pits");
+                if (HighlightOpeningMoves(player)) uiManager.ShowLastMove(SelectPitPrompt);
             }
 
             RequestHotSeatMove(player);
@@ -986,6 +1058,7 @@ namespace NsoloGame.Unity
                 return;
             }
 
+            uiManager.ClearHighlights();
             agent.SubmitMove(selected);
         }
 
@@ -1228,6 +1301,8 @@ namespace NsoloGame.Unity
             playingOnlineMove = false;
             formationHeld = 0;
             gameStartTime = Time.time;
+            openingHighlightPending[1] = false;
+            openingHighlightPending[2] = false;
 
             System.Array.Clear(capturesThisGame, 0, capturesThisGame.Length);
             System.Array.Clear(longestRelayThisGame, 0, longestRelayThisGame.Length);
@@ -1385,8 +1460,7 @@ namespace NsoloGame.Unity
 
             if (mine)
             {
-                uiManager.HighlightLegalMoves(gameEngine.GetLegalMoves(gameBoard, player));
-                uiManager.ShowLastMove("Select one of your highlighted pits");
+                if (HighlightOpeningMoves(player)) uiManager.ShowLastMove(SelectPitPrompt);
                 TutorialCoach.Show(TutorialTip.YourPits);
                 return;
             }
@@ -1817,8 +1891,10 @@ namespace NsoloGame.Unity
                 : "Move undone");
             uiManager.StartTurnTimer();
 
-            List<Move> legalMoves = gameEngine.GetLegalMoves(gameBoard, humanPlayer);
-            uiManager.HighlightLegalMoves(legalMoves);
+            // Undoing all the way back to the deal puts the opening move in front of the player
+            // again, so the glow that belongs to it is owed again too.
+            if (boardHistory.Count == 0) openingHighlightPending[humanPlayer] = true;
+            HighlightOpeningMoves(humanPlayer);
         }
 
         // ── Hint ─────────────────────────────────────────────────────────

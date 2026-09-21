@@ -771,17 +771,53 @@ namespace NsoloGame.Net
             RaiseMatchEnded(MatchEndReason.OpponentLeft);
         }
 
+        /// <summary>
+        /// We are out of the room — which happens for two completely different reasons, and this
+        /// callback cannot tell them apart on its own.
+        ///
+        /// The obvious one is a deliberate <see cref="Leave"/>: the room is released, the
+        /// connection stays up, and there is nothing to come back to.
+        ///
+        /// The other is a dropped connection, and it is the reason this method reads the way it
+        /// does. Photon raises OnLeftRoom on its way through a disconnect as well — see
+        /// LoadBalancingClient's StatusCode.Disconnect case, which calls
+        /// <c>MatchMakingCallbackTargets.OnLeftRoom()</c> and only then
+        /// <c>ConnectionCallbackTargets.OnDisconnected()</c>. So on every real drop this ran first
+        /// and cleared <see cref="rejoinCode"/>, and <see cref="OnDisconnected"/> arrived a moment
+        /// later to find no room worth going back to.
+        ///
+        /// That one line was the whole of the reported bug. The device that dropped fell straight
+        /// through to <see cref="RaiseMatchEnded"/> and put up "the match can't continue" with no
+        /// way back, while the device that stayed — which reaches its own grace period through
+        /// <see cref="OnPlayerLeftRoom"/>, a path the wipe never touched — sat counting down five
+        /// minutes for a player whose app had already given up. Same event, opposite outcomes, and
+        /// the seat the server was faithfully holding was never once asked for: every retry in
+        /// <see cref="Update"/> is guarded on a rejoinCode that could no longer be set. The rejoin
+        /// feature was unreachable in practice rather than merely unreliable.
+        ///
+        /// So the room is forgotten only when leaving was a decision. After a drop the code is kept
+        /// and OnDisconnected, which runs next, opens the grace window and starts asking for the
+        /// seat back.
+        /// </summary>
         public override void OnLeftRoom()
         {
-            // Cleared here rather than only in OnDisconnected, because Leave() drops the room
-            // without dropping the connection — so the callback that would have reset the flag
-            // never runs, and a stale true would silently swallow the next genuine disconnect.
+            // Read before it is reset, because it is the only thing here that knows which of the
+            // two cases this is.
+            bool deliberate = leavingDeliberately;
+
+            // Reset here rather than only in OnDisconnected, because Leave() drops the room without
+            // dropping the connection — so the callback that would have reset the flag never runs,
+            // and a stale true would silently swallow the next genuine disconnect.
             leavingDeliberately = false;
 
-            // No room to go back to. Without this, a connection dropping later — from the menu,
-            // with no game in progress — would find a stale code here and spend five minutes
-            // trying to rejoin a match that ended long ago.
-            rejoinCode = null;
+            if (deliberate)
+            {
+                // No room to go back to, and nobody holding a seat for us. Without this, a
+                // connection dropping later — from the menu, with no game in progress — would find
+                // a stale code here and spend five minutes trying to rejoin a match that ended long
+                // ago.
+                rejoinCode = null;
+            }
 
             // A create or join requested while still in the previous room was parked until the
             // room was released. This is that moment.
