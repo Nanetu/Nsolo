@@ -1,5 +1,7 @@
 # Nsolo
 
+**Repository:** https://github.com/Nanetu/Nsolo
+
 Nsolo is a Unity implementation of a four-row mancala-family board game for Android. It supports
 three ways to play:
 
@@ -24,7 +26,7 @@ features did not require changing the rules engine or the search.
   only running the game inside the editor. You can add this module later from Unity Hub > Installs
   if you skip it now.
 - **Git**, to clone the repository.
-- No separate Photon account or App ID is needed to try online play — the project already ships
+- No separate Photon account or App ID is needed to try online play: the project already ships
   with a configured Photon App ID for the free tier, good enough for testing. Swap in your own from
   the [Photon dashboard](https://dashboard.photonengine.com/) in
   `Assets/Photon/PhotonUnityNetworking/Resources/PhotonServerSettings.asset` if you plan to publish
@@ -38,9 +40,9 @@ features did not require changing the rules engine or the search.
    ```
 2. Open **Unity Hub > Add > Add project from disk**, and select the cloned `Nsolo` folder (the one
    containing `Assets/`, `Packages/`, and `ProjectSettings/`).
-3. Click the project to open it. Unity will import assets and compile scripts on first open — this
-   can take several minutes and the editor will look unresponsive during the initial import; let it
-   finish.
+3. Click the project to open it. Unity will import assets and compile scripts on first open. This
+   can take several minutes and the editor will look unresponsive during the initial import, so let
+   it finish.
 4. In the **Project** window, open `Assets/Prefabs/Scenes/SampleScene.unity` (this is the game's
    only scene; it should already be open by default).
 5. Press **Play** in the Editor toolbar. Use the main menu to choose Single-player, Hot-seat, or
@@ -49,34 +51,34 @@ features did not require changing the rules engine or the search.
 ### Building an installable APK (Android)
 
 1. **File > Build Settings**, make sure **Android** is the selected platform (switch platform if
-   it isn't — first switch can take a while).
+   it isn't; the first switch can take a while).
 2. Make sure **Development Build** is unticked for anything you intend to share, so the build
-   doesn't carry a debug watermark — or use the editor menu **Nsolo > Build > Clear Development
+   doesn't carry a debug watermark, or use the editor menu **Nsolo > Build > Clear Development
    Build Flags**, which also guards the build so a ticked box fails loudly instead of shipping a
    watermarked APK by accident.
 3. Click **Build** (or **Build And Run** with an Android device connected over USB with Developer
    Options/USB debugging enabled), and choose an output location for the `.apk`.
-4. Install the resulting APK on an Android device (minimum SDK 22 / Android 5.1) the normal way —
-   copy it over and open it, or `adb install path/to/app.apk`.
+4. Install the resulting APK on an Android device (minimum SDK 22 / Android 5.1) the normal way:
+   copy it over and open it, or use `adb install path/to/app.apk`.
 
 ### Online play
 
 Two devices can play each other once each has a build (or Editor instance) running the same Photon
-App ID, network protocol, and game version — which is the default out of the box, so any two builds
+App ID, network protocol, and game version, which is the default out of the box, so any two builds
 from this repository can already room-code into a match. One player creates a room and shares the
 six-character code; the other joins with it.
 
 The Unity project settings and package manifest are committed as part of the repository; generated
 folders such as `Library/`, `Temp/`, `obj/`, and `Logs/` are editor output, not application source,
-and are excluded via `.gitignore` — Unity regenerates them on first open.
+and are excluded via `.gitignore`. Unity regenerates them on first open.
 
 ### Troubleshooting
 
-- **"This project was created with a newer/older version of Unity"** — install exactly 2022.3.62f3
+- **"This project was created with a newer/older version of Unity"**: install exactly 2022.3.62f3
   via Unity Hub instead of letting Hub pick a nearby version.
-- **Pink/magenta materials** — usually means the Universal Render Pipeline package didn't finish
+- **Pink/magenta materials**: usually means the Universal Render Pipeline package didn't finish
   importing; reopen the project and let Unity finish compiling before pressing Play.
-- **Two builds can't find each other online** — confirm both were built from the same commit (same
+- **Two builds can't find each other online**: confirm both were built from the same commit (same
   Photon App ID and `AppVersion` in `PhotonServerSettings.asset`), and that both devices have a
   working internet connection.
 
